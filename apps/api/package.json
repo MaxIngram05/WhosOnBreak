@@ -1,0 +1,30 @@
+{
+  "name": "@whosonbreak/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-strip-types src/node.ts",
+    "migrate": "node --experimental-strip-types scripts/migrate.ts",
+    "seed": "node --experimental-strip-types scripts/seed.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.1",
+    "@whosonbreak/contracts": "0.1.0",
+    "@whosonbreak/core": "0.1.0",
+    "hono": "^4.9.6",
+    "jose": "^6.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.6",
+    "@types/node": "^22.15.3",
+    "typescript": "~5.9.2",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.34.0"
+  }
+}
