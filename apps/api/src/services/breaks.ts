@@ -28,16 +28,18 @@ import {
   type ParticipantSchedule,
 } from "@whosonbreak/core";
 import type {
-  Block,
   BreakQuery,
   BreaksResponse,
   OnBreakNowResponse,
   PublicUser,
+  VisibleBlock,
+  WeekView,
 } from "@whosonbreak/contracts";
 import type { Sql } from "../db/sql.ts";
 import {
   loadComparableSchedules,
   weekIndexAt,
+  type ComparableBlock,
   type ComparableSchedule,
 } from "../repositories/schedules.ts";
 
@@ -104,7 +106,7 @@ function resolveDayWindow(query: BreakQuery): DayWindow {
  * would make the same group render differently depending on who joined first.
  */
 export function resolveViewerZone(
-  query: BreakQuery,
+  query: { timeZone?: string },
   viewerSchedule: ComparableSchedule | undefined,
 ): string {
   return query.timeZone ?? viewerSchedule?.timeZone ?? "UTC";
@@ -120,13 +122,13 @@ export function resolveViewerZone(
  * rather than the neighbouring one. That only touches the few hours around
  * Sunday midnight that the offset spans, which sit outside any sane day window.
  */
-function blocksForWeek(schedule: ComparableSchedule, reference: Date): Block[] {
+function blocksForWeek(schedule: ComparableSchedule, reference: Date): ComparableBlock[] {
   if (schedule.cycleWeeks === 1) return schedule.blocks;
   const week = weekIndexAt(schedule, reference);
   return schedule.blocks.filter((block) => block.weekIndex === week);
 }
 
-function toIntervals(blocks: readonly Block[]): Interval[] {
+function toIntervals(blocks: readonly ComparableBlock[]): Interval[] {
   return blocks.map((block) => ({ start: block.start, end: block.end }));
 }
 
@@ -265,6 +267,7 @@ export function computeOnBreakNow(input: OnBreakNowInput): OnBreakNowResponse {
         until:
           next && Math.floor(next.start / MINUTES_PER_DAY) === today ? next.start : null,
         label: inBlock?.label ?? null,
+        kind: inBlock?.kind ?? null,
       });
     }
   }
@@ -278,5 +281,51 @@ export function computeOnBreakNow(input: OnBreakNowInput): OnBreakNowResponse {
     onBreak,
     busy,
     unknown,
+  };
+}
+
+export interface WeekViewInput {
+  /** The person being looked at, already checked as someone the viewer may see. */
+  target: Candidate;
+  viewerSchedule: ComparableSchedule | undefined;
+  query: { timeZone?: string; week?: string };
+  now: Date;
+}
+
+/**
+ * One person's week on the viewer's clock: the "tap a classmate to see their
+ * timetable" screen.
+ *
+ * Blocks are shifted one at a time, not as a merged set, so each keeps its own
+ * label and kind -- both already redacted by the repository according to the
+ * owner's visibility, so nothing here can reveal more than they chose to.
+ */
+export function computeWeekView(input: WeekViewInput): WeekView {
+  const schedule = input.target.schedule;
+  // A viewer with no schedule of their own has no clock to project onto, and
+  // UTC would show everyone's timetable shifted by an hour or more. Their own
+  // zone is the better guess at what the viewer wants to read.
+  const viewerZone =
+    input.query.timeZone ?? input.viewerSchedule?.timeZone ?? schedule?.timeZone ?? "UTC";
+  const { weekStart, reference } = resolveWeek(viewerZone, input.now, input.query.week);
+
+  const blocks: VisibleBlock[] = [];
+  if (schedule) {
+    for (const block of blocksForWeek(schedule, reference)) {
+      for (const span of shiftToZone([block], schedule.timeZone, viewerZone, reference)) {
+        blocks.push({ start: span.start, end: span.end, label: block.label, kind: block.kind });
+      }
+    }
+    blocks.sort((a, b) => a.start - b.start || a.end - b.end);
+  }
+
+  return {
+    user: input.target.user,
+    timeZone: viewerZone,
+    weekStart: formatCalendarDate(weekStart),
+    hasSchedule: schedule !== undefined,
+    weekIndex: schedule ? weekIndexAt(schedule, reference) : 0,
+    cycleWeeks: schedule?.cycleWeeks ?? 1,
+    blocks,
   };
 }

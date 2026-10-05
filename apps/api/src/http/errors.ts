@@ -61,7 +61,10 @@ export const notFound = (message = "Not found") =>
 export const conflict = (message: string) =>
   new ApiProblem(409, ERROR_CODES.conflict, message);
 
-export const rateLimited = (message = "Too many requests") =>
+export const groupFull = (message = "This group is full") =>
+  new ApiProblem(409, ERROR_CODES.groupFull, message);
+
+export const rateLimited =(message = "Too many requests") =>
   new ApiProblem(429, ERROR_CODES.rateLimited, message);
 
 export const internal = (message = "Something went wrong") =>

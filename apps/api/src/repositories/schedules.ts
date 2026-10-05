@@ -423,6 +423,19 @@ export async function replaceBlocks(
   });
 }
 
+/**
+ * A block as someone other than its owner may see it. Label and kind are null
+ * wherever the owner's visibility withholds them.
+ */
+export interface ComparableBlock {
+  id: string;
+  label: string | null;
+  kind: BlockKind | null;
+  weekIndex: number;
+  start: number;
+  end: number;
+}
+
 /** A person's active schedule plus their blocks, ready for comparison. */
 export interface ComparableSchedule {
   userId: string;
@@ -431,7 +444,7 @@ export interface ComparableSchedule {
   cycleWeeks: number;
   cycleAnchor: string | null;
   /** Every week of the cycle; the caller picks the week it is resolving. */
-  blocks: Block[];
+  blocks: ComparableBlock[];
 }
 
 interface ComparableRow {
@@ -457,8 +470,9 @@ interface ComparableRow {
  * the difference between "busy" and "has not set this up yet". Reporting those
  * two the same way is how an app ends up quietly lying about a friend.
  *
- * Labels are stripped here according to each owner's own visibility setting.
- * The viewer's own labels always survive.
+ * Labels and kinds are stripped here according to each owner's visibility:
+ * busy_only shows neither, labels shows the label, full shows both. The
+ * viewer's own blocks are always shown in full.
  */
 export async function loadComparableSchedules(
   sql: Sql,
@@ -508,15 +522,15 @@ export async function loadComparableSchedules(
       continue; // An active schedule with no blocks in it yet.
     }
 
+    const own = row.user_id === viewerId;
     const maySeeLabel =
-      row.user_id === viewerId ||
-      row.default_visibility === "labels" ||
-      row.default_visibility === "full";
+      own || row.default_visibility === "labels" || row.default_visibility === "full";
+    const maySeeKind = own || row.default_visibility === "full";
 
     entry.blocks.push({
       id: row.block_id,
       label: maySeeLabel ? row.label : null,
-      kind: row.kind ?? "other",
+      kind: maySeeKind ? (row.kind ?? "other") : null,
       weekIndex: row.week_index ?? 0,
       start: row.start_minute,
       end: row.end_minute,

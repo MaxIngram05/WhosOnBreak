@@ -5,6 +5,7 @@
 import {
   FRIEND_CODE_LENGTH,
   JOIN_CODE_ALPHABET,
+  type AuthProvider,
   type PrivateUser,
   type PublicUser,
   type Visibility,
@@ -112,7 +113,7 @@ export async function findUsersByIds(
  */
 export async function findOrCreateUserForIdentity(
   sql: Sql,
-  provider: "google",
+  provider: AuthProvider,
   identity: GoogleIdentity,
 ): Promise<{ user: UserRow; created: boolean }> {
   return sql.transaction(async (tx) => {

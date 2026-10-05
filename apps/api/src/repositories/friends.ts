@@ -228,3 +228,79 @@ export async function filterToAcceptedFriends(
 
   return new Set(rows.map((row) => row.friend_id));
 }
+
+// ---------------------------------------------------------------------------
+// Blocking
+//
+// A block is the same row as a friendship, with status 'blocked' and
+// requested_by naming the blocker. Reusing the row means a pair can never be
+// both friends and blocked, and the unique index that stops duplicate
+// requests also stops a blocked person from sending a fresh one.
+// ---------------------------------------------------------------------------
+
+/** Whether either person has blocked the other. */
+export async function isBlockedBetween(sql: Sql, a: string, b: string): Promise<boolean> {
+  const row = await findFriendship(sql, a, b);
+  return row?.status === "blocked";
+}
+
+/**
+ * Blocks someone: ends any friendship or pending request, withdraws group
+ * invites between the two, and stops further requests either way.
+ *
+ * If they had already blocked you, their block stands -- overwriting it would
+ * hand them the power to lift it by unblocking.
+ */
+export async function blockUser(sql: Sql, blockerId: string, targetId: string): Promise<void> {
+  if (blockerId === targetId) throw badRequest("You cannot block yourself");
+
+  const [userA, userB] = canonical(blockerId, targetId);
+  await sql.transaction(async (tx) => {
+    try {
+      await tx.query(
+        `INSERT INTO friendships (user_a, user_b, status, requested_by)
+         VALUES ($1, $2, 'blocked', $3)
+         ON CONFLICT (user_a, user_b) DO UPDATE
+           SET status = 'blocked', requested_by = $3, updated_at = now()
+           WHERE friendships.status <> 'blocked'`,
+        [userA, userB, blockerId],
+      );
+    } catch (error) {
+      if (isPgError(error, PG_ERROR.foreignKeyViolation)) throw notFound("No such user");
+      throw error;
+    }
+
+    await tx.query(
+      `DELETE FROM group_invites
+        WHERE (inviter_id = $1 AND invitee_id = $2) OR (inviter_id = $2 AND invitee_id = $1)`,
+      [blockerId, targetId],
+    );
+  });
+}
+
+/** Lifts a block. Only the person who placed it can. */
+export async function unblockUser(sql: Sql, blockerId: string, targetId: string): Promise<void> {
+  const [userA, userB] = canonical(blockerId, targetId);
+  const deleted = await sql.query<{ id: string }>(
+    `DELETE FROM friendships
+      WHERE user_a = $1 AND user_b = $2 AND status = 'blocked' AND requested_by = $3
+      RETURNING id`,
+    [userA, userB, blockerId],
+  );
+  if (deleted.length === 0) throw notFound("You have not blocked them");
+}
+
+/** The people this user has blocked -- never the people who blocked them. */
+export async function listBlocked(sql: Sql, userId: string): Promise<PublicUserRow[]> {
+  return sql.query<PublicUserRow>(
+    `SELECT u.id, u.display_name, u.avatar_url
+       FROM friendships f
+       JOIN users u
+         ON u.id = CASE WHEN f.user_a = $1 THEN f.user_b ELSE f.user_a END
+      WHERE $1 IN (f.user_a, f.user_b)
+        AND f.status = 'blocked'
+        AND f.requested_by = $1
+      ORDER BY u.display_name`,
+    [userId],
+  );
+}
