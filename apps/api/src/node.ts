@@ -16,6 +16,7 @@ import { createGoogleVerifier } from "./auth/google.ts";
 import { isPgliteUrl, openDatabase } from "./db/open.ts";
 import { applyMigrations, loadMigrations } from "./db/migrate.ts";
 import { describeSeed, devSession, seed } from "./dev/seed.ts";
+import { memoryRateLimiter } from "./http/rate-limit.ts";
 
 const config = loadConfig({ ENVIRONMENT: "development", ...process.env });
 const db = await openDatabase(config.databaseUrl);
@@ -41,10 +42,13 @@ if (process.env.SEED === "1") {
 }
 
 const google = createGoogleVerifier(config.googleClientIds);
+// One process, so an in-memory limiter is exact here.
+const rateLimiter = memoryRateLimiter();
 const app = createApp(() => ({
-  ctx: { config, db, google, now: () => new Date() },
+  ctx: { config, db, google, rateLimiter, now: () => new Date() },
 }));
 
-serve({ fetch: app.fetch, port }, (info) => {
+// 0.0.0.0 so a phone on the same Wi-Fi can reach the dev server.
+serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
   console.log(`WhosOnBreak API listening on http://localhost:${info.port}`);
 });

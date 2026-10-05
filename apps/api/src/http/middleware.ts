@@ -8,6 +8,7 @@ import { ZodError, type ZodTypeAny, type z } from "zod";
 import type { AppBindings } from "../context.ts";
 import { ApiProblem, badRequest, notFound, rateLimited, unauthenticated } from "./errors.ts";
 import { verifyAccessToken } from "../auth/tokens.ts";
+import { memoryRateLimiter } from "./rate-limit.ts";
 
 /**
  * Tags every request so a log line can be traced to a client report. Honours a
@@ -106,10 +107,11 @@ export function parseQuery<Schema extends ZodTypeAny>(
 /**
  * Requires a valid bearer token and puts the user id on the context.
  *
- * Only the signature is checked, with no database lookup, which is the point of
- * using a JWT for the short-lived half of the pair. The cost is that deleting
- * an account leaves its access token working for up to fifteen minutes; the
- * refresh token is revoked immediately, so the session cannot outlive that.
+ * Reads check only the signature, with no database lookup, which is the point
+ * of using a JWT for the short-lived half of the pair. Writes also confirm the
+ * account still exists, because deleting an account leaves its access token
+ * validly signed for up to fifteen minutes. The refresh token is revoked
+ * immediately, so the session cannot outlive that.
  */
 export function requireAuth(): MiddlewareHandler<AppBindings> {
   return async (c, next) => {
@@ -124,65 +126,48 @@ export function requireAuth(): MiddlewareHandler<AppBindings> {
     const ctx = c.get("ctx");
     const { userId, sessionId } = await verifyAccessToken(ctx.config, token);
 
+    // A write by a deleted account would otherwise reach a foreign key and
+    // come back as a 500. One primary-key lookup on writes only; reads by a
+    // deleted account simply find nothing.
+    if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+      const exists = await ctx.db.query("SELECT 1 FROM users WHERE id = $1", [userId]);
+      if (exists.length === 0) throw unauthenticated("This account no longer exists");
+    }
+
     c.set("user", { id: userId, sessionId });
     await next();
   };
 }
 
-interface Bucket {
-  tokens: number;
-  lastRefillMs: number;
-}
-
 /**
  * A token bucket, keyed by user when we know them and by IP when we do not.
  *
- * In-process, which is honest about what it is: with a single Worker isolate it
- * is a useful brake on a runaway client and a stolen-token guessing loop, and
- * it is not a defence against a distributed attacker. The interface is one
- * function, so moving the counters into a Durable Object or Redis later does
- * not touch any route.
+ * `durable` limits go through the context's limiter -- a Durable Object in
+ * production, so the count holds across every isolate. The rest use a bucket
+ * local to this process; see rate-limit.ts for why both exist.
  */
 export function rateLimit(options: {
+  name: string;
   capacity: number;
   refillPerSecond: number;
+  durable?: boolean;
 }): MiddlewareHandler<AppBindings> {
-  const buckets = new Map<string, Bucket>();
+  const local = memoryRateLimiter();
 
   return async (c, next) => {
-    const key =
+    const who =
       c.get("user")?.id ??
       c.req.header("cf-connecting-ip") ??
       c.req.header("x-forwarded-for") ??
       "anonymous";
 
-    const nowMs = Date.now();
-    const bucket = buckets.get(key) ?? {
-      tokens: options.capacity,
-      lastRefillMs: nowMs,
-    };
-
-    const elapsedSeconds = (nowMs - bucket.lastRefillMs) / 1000;
-    bucket.tokens = Math.min(
+    const limiter = options.durable ? c.get("ctx").rateLimiter : local;
+    const allowed = await limiter.take(
+      `${options.name}:${who}`,
       options.capacity,
-      bucket.tokens + elapsedSeconds * options.refillPerSecond,
+      options.refillPerSecond,
     );
-    bucket.lastRefillMs = nowMs;
-
-    if (bucket.tokens < 1) {
-      buckets.set(key, bucket);
-      throw rateLimited();
-    }
-
-    bucket.tokens -= 1;
-    buckets.set(key, bucket);
-
-    // Unbounded growth would be a slow leak in a long-lived isolate.
-    if (buckets.size > 10_000) {
-      for (const [existingKey, existing] of buckets) {
-        if (existing.tokens >= options.capacity) buckets.delete(existingKey);
-      }
-    }
+    if (!allowed) throw rateLimited();
 
     await next();
   };

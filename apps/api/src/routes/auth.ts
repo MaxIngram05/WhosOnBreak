@@ -4,13 +4,14 @@
 
 import { Hono } from "hono";
 import {
+  devSignInRequestSchema,
   googleSignInRequestSchema,
   logoutRequestSchema,
   refreshRequestSchema,
 } from "@whosonbreak/contracts";
 import type { AppBindings } from "../context.ts";
 import { parseBody, requireAuth } from "../http/middleware.ts";
-import { unauthenticated } from "../http/errors.ts";
+import { notFound, unauthenticated } from "../http/errors.ts";
 import { findOrCreateUserForIdentity, findUserById } from "../repositories/users.ts";
 import {
   consumeRefreshToken,
@@ -19,6 +20,7 @@ import {
   revokeTokenByValue,
 } from "../repositories/sessions.ts";
 import { createSchedule } from "../repositories/schedules.ts";
+import { isValidTimeZone } from "@whosonbreak/core";
 import { issueSession } from "../services/session.ts";
 
 export function authRoutes(): Hono<AppBindings> {
@@ -45,6 +47,40 @@ export function authRoutes(): Hono<AppBindings> {
     const session = await issueSession(ctx, user, {
       userAgent: c.req.header("user-agent"),
     });
+    return c.json(session, created ? 201 : 200);
+  });
+
+  /**
+   * Development only: sign in as anyone by name, so the app can be tried
+   * before Google OAuth clients exist. Outside development it answers exactly
+   * like a route that does not exist. The same name always means the same
+   * account, which is what makes two phones -- "ada" and "ben" -- testable.
+   */
+  routes.post("/dev", async (c) => {
+    const ctx = c.get("ctx");
+    if (ctx.config.environment !== "development") throw notFound("No such route");
+
+    const body = await parseBody(c, devSignInRequestSchema);
+    const slug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "dev";
+
+    const { user, created } = await findOrCreateUserForIdentity(ctx.db, "dev", {
+      subject: slug,
+      email: `${slug}@dev.invalid`,
+      emailVerified: true,
+      name: body.name,
+      pictureUrl: null,
+    });
+
+    if (created && body.timeZone && isValidTimeZone(body.timeZone)) {
+      await createSchedule(
+        ctx.db,
+        user.id,
+        { name: "My schedule", timeZone: body.timeZone, isActive: true, cycleWeeks: 1, blocks: [] },
+        ctx.now(),
+      );
+    }
+
+    const session = await issueSession(ctx, user, { userAgent: c.req.header("user-agent") });
     return c.json(session, created ? 201 : 200);
   });
 

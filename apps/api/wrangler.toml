@@ -17,3 +17,18 @@ GOOGLE_CLIENT_IDS = ""
 
 [observability]
 enabled = true
+
+# Rate limits that must hold across every isolate: sign-in, refresh, and
+# sending friend requests. One object per (limit, caller) pair.
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiterObject"
+
+# SQLite-backed, which is what the Workers free plan supports.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RateLimiterObject"]
+
+# Nightly at 03:17 UTC: delete expired refresh tokens.
+[triggers]
+crons = ["17 3 * * *"]

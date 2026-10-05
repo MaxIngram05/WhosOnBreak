@@ -10,11 +10,14 @@
 import type { Config } from "./config.ts";
 import type { Database } from "./db/sql.ts";
 import type { GoogleVerifier } from "./auth/google.ts";
+import type { RateLimiter } from "./http/rate-limit.ts";
 
 export interface AppContext {
   config: Config;
   db: Database;
   google: GoogleVerifier;
+  /** For limits that must hold across every instance of the service. */
+  rateLimiter: RateLimiter;
   /** Injected so tests can pin the current instant. */
   now(): Date;
 }

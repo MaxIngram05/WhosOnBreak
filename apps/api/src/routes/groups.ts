@@ -8,22 +8,28 @@
 import { Hono } from "hono";
 import {
   breakQuerySchema,
+  createGroupInviteRequestSchema,
   createGroupRequestSchema,
   joinGroupRequestSchema,
+  updateGroupMemberRequestSchema,
+  updateGroupRequestSchema,
 } from "@whosonbreak/contracts";
 import type { AppBindings } from "../context.ts";
 import { parseBody, parseQuery, uuidParam } from "../http/middleware.ts";
 import {
   archiveGroup,
   createGroup,
+  createInvite,
   joinGroupByCode,
   listGroupMembers,
   listGroupsForUser,
   removeGroupMember,
   requireMembership,
   rotateJoinCode,
+  setMemberCanInvite,
   toGroup,
   toGroupDetail,
+  updateGroup,
 } from "../repositories/groups.ts";
 import { computeBreaks, computeOnBreakNow, loadCandidates } from "../services/breaks.ts";
 
@@ -39,7 +45,7 @@ export function groupRoutes(): Hono<AppBindings> {
   routes.post("/", async (c) => {
     const ctx = c.get("ctx");
     const body = await parseBody(c, createGroupRequestSchema);
-    const group = await createGroup(ctx.db, c.get("user").id, body.name);
+    const group = await createGroup(ctx.db, c.get("user").id, body);
     return c.json(toGroup(group), 201);
   });
 
@@ -55,6 +61,37 @@ export function groupRoutes(): Hono<AppBindings> {
     const group = await requireMembership(ctx.db, uuidParam(c, "id"), c.get("user").id);
     const members = await listGroupMembers(ctx.db, group.id);
     return c.json(toGroupDetail(group, members));
+  });
+
+  /** Owner only: rename, or set or clear the subtitle. */
+  routes.patch("/:id", async (c) => {
+    const ctx = c.get("ctx");
+    const body = await parseBody(c, updateGroupRequestSchema);
+    const group = await updateGroup(ctx.db, uuidParam(c, "id"), c.get("user").id, body);
+    return c.json(toGroup(group));
+  });
+
+  /** Owner only: grant or withdraw a member's permission to bring people in. */
+  routes.patch("/:id/members/:userId", async (c) => {
+    const ctx = c.get("ctx");
+    const body = await parseBody(c, updateGroupMemberRequestSchema);
+    const groupId = uuidParam(c, "id");
+    await setMemberCanInvite(
+      ctx.db,
+      groupId,
+      c.get("user").id,
+      uuidParam(c, "userId"),
+      body.canInvite,
+    );
+    return c.json(await listGroupMembers(ctx.db, groupId));
+  });
+
+  /** Invite a friend directly. Owner, or a member who may invite. */
+  routes.post("/:id/invites", async (c) => {
+    const ctx = c.get("ctx");
+    const body = await parseBody(c, createGroupInviteRequestSchema);
+    const invite = await createInvite(ctx.db, uuidParam(c, "id"), c.get("user").id, body.userId);
+    return c.json(invite, 201);
   });
 
   /** Owner only: closes the group for everyone. */

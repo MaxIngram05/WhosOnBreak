@@ -24,7 +24,7 @@ const configSchema = z.object({
    * that its holder meant to sign in to us, so this list is the audience check
    * and it is not optional.
    */
-  googleClientIds: z.array(z.string().min(1)).min(1, "GOOGLE_CLIENT_IDS is required"),
+  googleClientIds: z.array(z.string().min(1)),
 
   /** Short, because a leaked access token cannot be revoked, only outlived. */
   accessTokenTtlSeconds: z.number().int().min(60).max(3600).default(900),
@@ -36,7 +36,12 @@ const configSchema = z.object({
 
   /** Origins the web client may call from. Empty means same-origin only. */
   corsOrigins: z.array(z.string()).default([]),
-});
+}).refine(
+  // Development has the dev sign-in route and can do without Google. Anywhere
+  // else, no client ids would mean nobody can sign in at all.
+  (config) => config.environment === "development" || config.googleClientIds.length > 0,
+  { message: "GOOGLE_CLIENT_IDS is required", path: ["googleClientIds"] },
+);
 
 export type Config = z.infer<typeof configSchema>;
 

@@ -112,7 +112,7 @@ export async function seed(db: Sql, now: Date): Promise<SeedResult> {
   const ben = users.ben as UserRow;
   const cleo = users.cleo as UserRow;
 
-  const group = await createGroup(db, ada.id, "Demo group");
+  const group = await createGroup(db, ada.id, { name: "Demo group", subtitle: "Seeded for development" });
   await joinGroupByCode(db, ben.id, group.join_code);
   await joinGroupByCode(db, cleo.id, group.join_code);
 
