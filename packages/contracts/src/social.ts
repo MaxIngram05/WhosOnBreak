@@ -87,13 +87,28 @@ export const createFriendRequestSchema = z
 
 export type CreateFriendRequest = z.infer<typeof createFriendRequestSchema>;
 
+/**
+ * A group stays small enough that browsing each member's week one by one is
+ * a reasonable thing to do -- a class, not a year group.
+ */
+export const MAX_GROUP_MEMBERS = 30;
+
+export const groupSubtitleSchema = z.string().trim().max(80);
+
 export const groupSchema = z.object({
   id: uuidSchema,
   name: z.string(),
-  /** Only ever sent to members; absent for everyone else. */
+  /** Free text to tell same-named groups apart: "Mr Smith, Room 4". */
+  subtitle: z.string().nullable(),
+  /**
+   * Present only for the owner and members who may invite. Everyone else is
+   * in the group without being able to bring anyone else into it.
+   */
   joinCode: z.string().optional(),
   memberCount: z.number().int().nonnegative(),
   role: groupRoleSchema,
+  /** Whether the caller may share the code and send invites. */
+  canInvite: z.boolean(),
   createdAt: z.string().datetime(),
 });
 
@@ -102,6 +117,7 @@ export type Group = z.infer<typeof groupSchema>;
 export const groupMemberSchema = z.object({
   user: publicUserSchema,
   role: groupRoleSchema,
+  canInvite: z.boolean(),
   joinedAt: z.string().datetime(),
   /** False when someone has joined but not entered a schedule yet. */
   hasSchedule: z.boolean(),
@@ -117,12 +133,55 @@ export type GroupDetail = z.infer<typeof groupDetailSchema>;
 
 export const createGroupRequestSchema = z.object({
   name: z.string().trim().min(1).max(60),
+  subtitle: groupSubtitleSchema.optional(),
 });
 
 export type CreateGroupRequest = z.infer<typeof createGroupRequestSchema>;
+
+/** Owner only. A null or empty subtitle clears it. */
+export const updateGroupRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(60).optional(),
+    subtitle: groupSubtitleSchema.nullable().optional(),
+  })
+  .refine((body) => body.name !== undefined || body.subtitle !== undefined, {
+    message: "Nothing to update",
+  });
+
+export type UpdateGroupRequest = z.infer<typeof updateGroupRequestSchema>;
+
+/** Owner only: who besides the owner may bring people in. */
+export const updateGroupMemberRequestSchema = z.object({
+  canInvite: z.boolean(),
+});
+
+export type UpdateGroupMemberRequest = z.infer<typeof updateGroupMemberRequestSchema>;
 
 export const joinGroupRequestSchema = z.object({
   code: joinCodeSchema,
 });
 
 export type JoinGroupRequest = z.infer<typeof joinGroupRequestSchema>;
+
+/** A member who may invite asks one of their friends to join. */
+export const createGroupInviteRequestSchema = z.object({
+  userId: uuidSchema,
+});
+
+export type CreateGroupInviteRequest = z.infer<typeof createGroupInviteRequestSchema>;
+
+export const groupInviteSchema = z.object({
+  id: uuidSchema,
+  group: z.object({
+    id: uuidSchema,
+    name: z.string(),
+    subtitle: z.string().nullable(),
+    memberCount: z.number().int().nonnegative(),
+  }),
+  inviter: publicUserSchema,
+  invitee: publicUserSchema,
+  createdAt: z.string().datetime(),
+});
+
+export type GroupInvite = z.infer<typeof groupInviteSchema>;
+

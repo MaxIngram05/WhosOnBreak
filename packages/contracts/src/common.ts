@@ -110,6 +110,8 @@ export const ERROR_CODES = {
   notFound: "not_found",
   conflict: "conflict",
   rateLimited: "rate_limited",
+  /** A group already has the maximum number of members. */
+  groupFull: "group_full",
   internal: "internal",
 } as const;
 

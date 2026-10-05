@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 import {
+  blockKindSchema,
   calendarDateSchema,
   minuteOfWeekSchema,
   publicUserSchema,
@@ -108,6 +109,8 @@ export const onBreakNowResponseSchema = z.object({
        * Null otherwise, which the UI shows as plain "busy".
        */
       label: z.string().nullable(),
+      /** Class, work or other -- only when their visibility is `full`. */
+      kind: blockKindSchema.nullable(),
     }),
   ),
   unknown: z.array(publicUserSchema),
@@ -124,3 +127,44 @@ export const adHocBreakQuerySchema = breakQuerySchema.extend({
 });
 
 export type AdHocBreakQuery = z.infer<typeof adHocBreakQuerySchema>;
+
+/**
+ * One person's busy time for a week, as the viewer is allowed to see it.
+ *
+ * Blocks are on the viewer's axis (in `timeZone`), for whichever week of the
+ * person's own cycle falls in the requested week. What each block reveals
+ * follows the owner's visibility setting:
+ *
+ * - busy_only: start and end only; label and kind are null
+ * - labels:    plus the label
+ * - full:      plus the kind (class / work / other)
+ */
+export const weekViewQuerySchema = z.object({
+  timeZone: timeZoneSchema.optional(),
+  week: calendarDateSchema.optional(),
+});
+
+export type WeekViewQuery = z.infer<typeof weekViewQuerySchema>;
+
+export const visibleBlockSchema = z.object({
+  start: minuteOfWeekSchema,
+  end: minuteOfWeekSchema,
+  label: z.string().nullable(),
+  kind: blockKindSchema.nullable(),
+});
+
+export type VisibleBlock = z.infer<typeof visibleBlockSchema>;
+
+export const weekViewSchema = z.object({
+  user: publicUserSchema,
+  timeZone: z.string(),
+  weekStart: z.string(),
+  /** False when they have no active schedule; `blocks` is then empty. */
+  hasSchedule: z.boolean(),
+  /** Which week of their own cycle this is: 0 for Week A, 1 for Week B. */
+  weekIndex: z.number().int().nonnegative(),
+  cycleWeeks: z.number().int().positive(),
+  blocks: z.array(visibleBlockSchema),
+});
+
+export type WeekView = z.infer<typeof weekViewSchema>;

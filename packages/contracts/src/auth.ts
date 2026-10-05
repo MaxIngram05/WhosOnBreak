@@ -11,8 +11,21 @@
 import { z } from "zod";
 import { publicUserSchema, timeZoneSchema, visibilitySchema } from "./common";
 
-export const authProviderSchema = z.enum(["google"]);
+/** `dev` exists only on a server running with ENVIRONMENT=development. */
+export const authProviderSchema = z.enum(["google", "dev"]);
 export type AuthProvider = z.infer<typeof authProviderSchema>;
+
+/**
+ * Development sign-in: a name, and nothing to prove it. Outside a server
+ * running with ENVIRONMENT=development the route answers 404, exactly like a
+ * route that does not exist.
+ */
+export const devSignInRequestSchema = z.object({
+  name: z.string().trim().min(1).max(40),
+  timeZone: z.string().optional(),
+});
+
+export type DevSignInRequest = z.infer<typeof devSignInRequestSchema>;
 
 export const googleSignInRequestSchema = z.object({
   /** The `id_token` from Google Sign-In. Verified against Google's JWKS. */
