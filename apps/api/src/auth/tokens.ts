@@ -28,15 +28,30 @@ const AUDIENCE = "whosonbreak-app";
 /** Claims we put in, and the only ones we read back out. */
 export interface AccessTokenClaims extends JWTPayload {
   sub: string;
+  /**
+   * The refresh token family this access token was minted from: one per
+   * signed-in device. It is what lets "log out" end this device's session
+   * without the client having to present its refresh token.
+   */
+  sid: string;
+}
+
+export interface VerifiedAccessToken {
+  userId: string;
+  sessionId: string;
 }
 
 function secretKey(config: Config): Uint8Array {
   return new TextEncoder().encode(config.jwtSecret);
 }
 
-export async function signAccessToken(config: Config, userId: string): Promise<string> {
+export async function signAccessToken(
+  config: Config,
+  userId: string,
+  sessionId: string,
+): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
-  return new SignJWT({})
+  return new SignJWT({ sid: sessionId })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setSubject(userId)
     .setIssuer(ISSUER)
@@ -46,8 +61,11 @@ export async function signAccessToken(config: Config, userId: string): Promise<s
     .sign(secretKey(config));
 }
 
-/** Returns the user id, or throws a 401. Never returns for an invalid token. */
-export async function verifyAccessToken(config: Config, token: string): Promise<string> {
+/** Returns who and which session, or throws a 401. Never returns for an invalid token. */
+export async function verifyAccessToken(
+  config: Config,
+  token: string,
+): Promise<VerifiedAccessToken> {
   try {
     const { payload } = await jwtVerify<AccessTokenClaims>(token, secretKey(config), {
       issuer: ISSUER,
@@ -57,8 +75,8 @@ export async function verifyAccessToken(config: Config, token: string): Promise<
       algorithms: ["HS256"],
     });
 
-    if (!payload.sub) throw new Error("No subject");
-    return payload.sub;
+    if (!payload.sub || typeof payload.sid !== "string") throw new Error("Missing claims");
+    return { userId: payload.sub, sessionId: payload.sid };
   } catch {
     // The reason is never reported back: "expired" and "forged" look the same
     // to a caller, and only one of them is anyone's business.

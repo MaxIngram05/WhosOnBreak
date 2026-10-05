@@ -40,8 +40,9 @@ function wrap(client: PGlite, depth: number): Sql {
   };
 }
 
-export async function createPgliteDatabase(): Promise<Database> {
-  const client = await PGlite.create();
+/** In memory by default; give a directory to keep the data between runs. */
+export async function createPgliteDatabase(dataDir?: string): Promise<Database> {
+  const client = await PGlite.create(dataDir);
   const sql = wrap(client, 0);
 
   return {

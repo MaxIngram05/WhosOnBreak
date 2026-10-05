@@ -1,0 +1,19 @@
+# The production deployment: one Worker, talking to Neon.
+#
+# Secrets are never in this file. Set them once per environment with
+#   npx wrangler secret put DATABASE_URL
+#   npx wrangler secret put JWT_SECRET
+# and see .env.example for what each one is.
+
+name = "whosonbreak-api"
+main = "src/worker.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+ENVIRONMENT = "production"
+# Not secret -- OAuth client ids ship inside the app anyway. Comma-separated:
+# the Android client id, plus the web client id if one is added later.
+GOOGLE_CLIENT_IDS = ""
+
+[observability]
+enabled = true

@@ -22,6 +22,8 @@ export interface AppContext {
 /** Set by the auth middleware on every request that reached a protected route. */
 export interface AuthenticatedUser {
   id: string;
+  /** The refresh token family behind this request's access token. */
+  sessionId: string;
 }
 
 /** The Hono variable map, so `c.get("user")` is typed rather than `any`. */

@@ -3,10 +3,10 @@
  * one place errors become responses.
  */
 
-import type { Context, MiddlewareHandler, Next } from "hono";
+import type { Context, ErrorHandler, MiddlewareHandler, Next } from "hono";
 import { ZodError, type ZodTypeAny, type z } from "zod";
 import type { AppBindings } from "../context.ts";
-import { ApiProblem, badRequest, rateLimited, unauthenticated } from "./errors.ts";
+import { ApiProblem, badRequest, notFound, rateLimited, unauthenticated } from "./errors.ts";
 import { verifyAccessToken } from "../auth/tokens.ts";
 
 /**
@@ -27,42 +27,37 @@ export function requestId(): MiddlewareHandler<AppBindings> {
 /**
  * Turns anything thrown into the single error shape from the contracts package.
  *
+ * Registered with `app.onError` rather than as a try/catch middleware: Hono
+ * catches whatever a handler throws before it can propagate back up through
+ * `await next()`, so a wrapping middleware would never see it.
+ *
  * Unexpected errors are logged in full and reported as a bare 500. Echoing an
  * internal message back would leak table names and query fragments to anyone
  * who can trigger a bug.
  */
-export function errorHandler(): MiddlewareHandler<AppBindings> {
-  return async (c, next) => {
-    try {
-      await next();
-    } catch (error) {
-      if (error instanceof ApiProblem) {
-        return c.json(error.toBody(), error.status as 400);
-      }
+export const handleError: ErrorHandler<AppBindings> = (error, c) => {
+  if (error instanceof ApiProblem) {
+    return c.json(error.toBody(), error.status as 400);
+  }
 
-      if (error instanceof ZodError) {
-        const problem = fromZodError(error);
-        return c.json(problem.toBody(), problem.status as 400);
-      }
+  if (error instanceof ZodError) {
+    const problem = fromZodError(error);
+    return c.json(problem.toBody(), problem.status as 400);
+  }
 
-      console.error(
-        JSON.stringify({
-          level: "error",
-          requestId: c.get("requestId"),
-          path: c.req.path,
-          method: c.req.method,
-          message: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
-        }),
-      );
+  console.error(
+    JSON.stringify({
+      level: "error",
+      requestId: c.get("requestId"),
+      path: c.req.path,
+      method: c.req.method,
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    }),
+  );
 
-      return c.json(
-        { error: { code: "internal", message: "Something went wrong" } },
-        500,
-      );
-    }
-  };
-}
+  return c.json({ error: { code: "internal", message: "Something went wrong" } }, 500);
+};
 
 function fromZodError(error: ZodError): ApiProblem {
   const fields: Record<string, string[]> = {};
@@ -127,9 +122,9 @@ export function requireAuth(): MiddlewareHandler<AppBindings> {
     if (!token) throw unauthenticated("Expected a bearer token");
 
     const ctx = c.get("ctx");
-    const userId = await verifyAccessToken(ctx.config, token);
+    const { userId, sessionId } = await verifyAccessToken(ctx.config, token);
 
-    c.set("user", { id: userId });
+    c.set("user", { id: userId, sessionId });
     await next();
   };
 }
@@ -193,12 +188,39 @@ export function rateLimit(options: {
   };
 }
 
-/** Hands the per-request context to every handler. */
+/**
+ * Hands the per-request context to every handler.
+ *
+ * The factory sees the request because on Workers that is where the
+ * environment lives. Whatever it returns as `release` runs once the response
+ * is ready -- how a per-request database pool gets closed.
+ */
 export function withContext(
-  factory: () => AppBindings["Variables"]["ctx"],
+  factory: (c: Context<AppBindings>) => {
+    ctx: AppBindings["Variables"]["ctx"];
+    release?: () => void;
+  },
 ): MiddlewareHandler<AppBindings> {
   return async (c: Context<AppBindings>, next: Next) => {
-    c.set("ctx", factory());
-    await next();
+    const { ctx, release } = factory(c);
+    c.set("ctx", ctx);
+    try {
+      await next();
+    } finally {
+      release?.();
+    }
   };
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A path segment that has to be a UUID. Anything else is reported as not
+ * found, which is what it is, rather than reaching Postgres as a malformed
+ * literal and coming back as a 500.
+ */
+export function uuidParam(c: Context<AppBindings>, name: string): string {
+  const value = c.req.param(name);
+  if (!value || !UUID_PATTERN.test(value)) throw notFound();
+  return value;
 }

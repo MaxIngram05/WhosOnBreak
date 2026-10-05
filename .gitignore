@@ -87,3 +87,7 @@ GoogleService-Info.plist
 
 # Android Profiling
 *.hprof
+
+# Local PGlite data directory (DATABASE_URL=pglite:./.data)
+.data/
+.wrangler/

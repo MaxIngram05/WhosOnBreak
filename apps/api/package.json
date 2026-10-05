@@ -4,13 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --experimental-strip-types src/node.ts",
-    "migrate": "node --experimental-strip-types scripts/migrate.ts",
-    "seed": "node --experimental-strip-types scripts/seed.ts",
+    "dev": "node --env-file-if-exists=.env --import tsx src/node.ts",
+    "migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
+    "seed": "node --env-file-if-exists=.env --import tsx scripts/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "dev:worker": "wrangler dev"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.1",
@@ -22,7 +23,9 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.6",
+    "@hono/node-server": "^2.1.3",
     "@types/node": "^22.15.3",
+    "tsx": "^4.23.15",
     "typescript": "~5.9.2",
     "vitest": "^3.2.4",
     "wrangler": "^4.34.0"
