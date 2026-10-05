@@ -17,6 +17,8 @@ export const friendshipStatusSchema = z.enum(["pending", "accepted", "blocked"])
 export type FriendshipStatus = z.infer<typeof friendshipStatusSchema>;
 
 export const friendSchema = z.object({
+  /** The friendship itself, which is what accepting a request refers to. */
+  id: uuidSchema,
   user: publicUserSchema,
   status: friendshipStatusSchema,
   /**
@@ -29,16 +31,6 @@ export const friendSchema = z.object({
 
 export type Friend = z.infer<typeof friendSchema>;
 
-export const createFriendRequestSchema = z
-  .object({
-    userId: uuidSchema.optional(),
-    email: z.string().email().optional(),
-  })
-  .refine((body) => Boolean(body.userId) !== Boolean(body.email), {
-    message: "Give exactly one of userId or email",
-  });
-
-export type CreateFriendRequest = z.infer<typeof createFriendRequestSchema>;
 
 export const groupRoleSchema = z.enum(["owner", "member"]);
 export type GroupRole = z.infer<typeof groupRoleSchema>;
@@ -56,6 +48,44 @@ export const joinCodeSchema = z
   .toUpperCase()
   .length(JOIN_CODE_LENGTH)
   .regex(new RegExp(`^[${JOIN_CODE_ALPHABET}]+$`), "Not a valid join code");
+
+/**
+ * Everyone has a personal friend code: typed in, or scanned from the QR code
+ * the app draws from it. Eight characters rather than a group's six, because a
+ * friend code reaches one specific person and should not be stumbled on by
+ * guessing.
+ */
+export const FRIEND_CODE_LENGTH = 8;
+
+/**
+ * Accepts the code however it was copied -- lower case, with the hyphen the
+ * app displays it with ("ABCD-EFGH"), or with stray spaces.
+ */
+export const friendCodeSchema = z
+  .string()
+  .transform((value) => value.replace(/[\s-]/g, "").toUpperCase())
+  .pipe(
+    z
+      .string()
+      .length(FRIEND_CODE_LENGTH, "Friend codes are eight characters")
+      .regex(new RegExp(`^[${JOIN_CODE_ALPHABET}]+$`), "Not a valid friend code"),
+  );
+
+/**
+ * A request is addressed by friend code, or by user id for someone you share
+ * a group with. There is deliberately no search: the only people you can reach
+ * are ones who gave you their code or are already in a group with you.
+ */
+export const createFriendRequestSchema = z
+  .object({
+    friendCode: friendCodeSchema.optional(),
+    userId: uuidSchema.optional(),
+  })
+  .refine((body) => (body.friendCode === undefined) !== (body.userId === undefined), {
+    message: "Give exactly one of friendCode or userId",
+  });
+
+export type CreateFriendRequest = z.infer<typeof createFriendRequestSchema>;
 
 export const groupSchema = z.object({
   id: uuidSchema,

@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 import {
+  calendarDateSchema,
   minuteOfWeekSchema,
   publicUserSchema,
   timeZoneSchema,
@@ -40,10 +41,7 @@ export const breakQuerySchema = z.object({
    * this week. It matters only across a daylight saving boundary, but there it
    * matters a lot.
    */
-  week: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD")
-    .optional(),
+  week: calendarDateSchema.optional(),
   dayStartMinute: z.coerce.number().int().min(0).max(1440).optional(),
   dayEndMinute: z.coerce.number().int().min(0).max(1440).optional(),
   minDurationMinutes: z.coerce.number().int().min(5).max(1440).default(15),
@@ -98,7 +96,20 @@ export const onBreakNowResponseSchema = z.object({
       freeForMinutes: z.number().int().nonnegative(),
     }),
   ),
-  busy: z.array(publicUserSchema),
+  busy: z.array(
+    publicUserSchema.extend({
+      /**
+       * When they next come free, or null if that is not before the day
+       * window closes -- outside the window counts as unavailable.
+       */
+      until: minuteOfWeekSchema.nullable(),
+      /**
+       * What they are in, only when their visibility setting allows labels.
+       * Null otherwise, which the UI shows as plain "busy".
+       */
+      label: z.string().nullable(),
+    }),
+  ),
   unknown: z.array(publicUserSchema),
 });
 

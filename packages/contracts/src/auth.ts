@@ -30,6 +30,8 @@ export type GoogleSignInRequest = z.infer<typeof googleSignInRequestSchema>;
 export const privateUserSchema = publicUserSchema.extend({
   email: z.string().email(),
   defaultVisibility: visibilitySchema,
+  /** Shown as text and as a QR code; anyone holding it can send a request. */
+  friendCode: z.string(),
   createdAt: z.string().datetime(),
 });
 

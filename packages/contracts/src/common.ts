@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { MINUTES_PER_WEEK, isValidTimeZone } from "@whosonbreak/core";
+import { MINUTES_PER_WEEK, isValidTimeZone, parseCalendarDate } from "@whosonbreak/core";
 
 export const uuidSchema = z.string().uuid();
 
@@ -63,6 +63,22 @@ export const timeZoneSchema = z
   .min(1)
   .max(64)
   .refine(isValidTimeZone, { message: "Not a recognised IANA time zone" });
+
+/** A calendar date with no time or zone, as YYYY-MM-DD. Must actually exist. */
+export const calendarDateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD")
+  .refine(
+    (value) => {
+      try {
+        parseCalendarDate(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    { message: "Not a real date" },
+  );
 
 /** How much of a person's schedule other people are allowed to see. */
 export const visibilitySchema = z.enum(["busy_only", "labels", "full"]);
