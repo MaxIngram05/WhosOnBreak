@@ -17,13 +17,18 @@ import { applyMigrations, loadMigrations } from "../src/db/migrate.ts";
 import type { Database } from "../src/db/sql.ts";
 import type { GoogleVerifier } from "../src/auth/google.ts";
 import { unauthenticated } from "../src/http/errors.ts";
+import { memoryRateLimiter } from "../src/http/rate-limit.ts";
 
-export const config = loadConfig({
-  DATABASE_URL: "pglite",
-  JWT_SECRET: "test-secret-test-secret-test-secret-0123456789",
-  GOOGLE_CLIENT_IDS: "test-client",
-  ENVIRONMENT: "test",
-});
+function configFor(environment: string) {
+  return loadConfig({
+    DATABASE_URL: "pglite",
+    JWT_SECRET: "test-secret-test-secret-test-secret-0123456789",
+    GOOGLE_CLIENT_IDS: "test-client",
+    ENVIRONMENT: environment,
+  });
+}
+
+export const config = configFor("test");
 
 const fakeGoogle: GoogleVerifier = {
   async verify(idToken) {
@@ -70,7 +75,14 @@ export interface Harness {
 
 let counter = 0;
 
-export async function createHarness(options: AppOptions = { rateLimits: false }): Promise<Harness> {
+export interface HarnessOptions extends AppOptions {
+  /** Defaults to "test". "development" turns on the dev sign-in route. */
+  environment?: "test" | "development" | "production";
+}
+
+export async function createHarness(
+  options: HarnessOptions = { rateLimits: false },
+): Promise<Harness> {
   migrations ??= await loadMigrations(
     fileURLToPath(new URL("../migrations", import.meta.url)),
   );
@@ -79,8 +91,12 @@ export async function createHarness(options: AppOptions = { rateLimits: false })
   await applyMigrations(db, migrations);
 
   let now = new Date("2026-10-07T12:00:00Z");
+  const harnessConfig = configFor(options.environment ?? "test");
+  const rateLimiter = memoryRateLimiter();
   const app = createApp(
-    () => ({ ctx: { config, db, google: fakeGoogle, now: () => now } }),
+    () => ({
+      ctx: { config: harnessConfig, db, google: fakeGoogle, rateLimiter, now: () => now },
+    }),
     options,
   );
 
