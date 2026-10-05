@@ -21,6 +21,10 @@ CREATE TABLE users (
     -- that might contain a doctor's appointment.
     default_visibility text NOT NULL DEFAULT 'busy_only'
                        CHECK (default_visibility IN ('busy_only', 'labels', 'full')),
+    -- What you give someone to send you a friend request, typed or scanned from
+    -- a QR code. Not a secret -- it only ever produces a request that still has
+    -- to be accepted -- but rotatable, for when it has been posted somewhere.
+    friend_code        text NOT NULL UNIQUE,
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now()
 );
@@ -73,8 +77,20 @@ CREATE TABLE schedules (
     -- IANA zone name. Blocks below are stored on this zone's local axis.
     time_zone  text NOT NULL,
     is_active  boolean NOT NULL DEFAULT true,
+    -- How many weeks the timetable takes to repeat: 1 for most, 2 for a
+    -- school running Week A / Week B. Blocks carry which week they belong to.
+    cycle_weeks  smallint NOT NULL DEFAULT 1 CHECK (cycle_weeks IN (1, 2)),
+    -- A Monday that was week 0 (Week A). Which week any other date falls in is
+    -- counted from here. Users re-set it when their school restarts the
+    -- rotation after a holiday, so it is a correction point, not a term date.
+    cycle_anchor date,
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT schedules_cycle_anchor CHECK (
+        (cycle_weeks = 1 AND cycle_anchor IS NULL) OR
+        (cycle_weeks > 1 AND cycle_anchor IS NOT NULL
+                         AND extract(isodow FROM cycle_anchor) = 1)
+    )
 );
 
 -- Old terms are kept rather than deleted, but exactly one schedule is the one
@@ -92,6 +108,10 @@ CREATE TABLE blocks (
     label        text,
     kind         text NOT NULL DEFAULT 'class'
                  CHECK (kind IN ('class', 'work', 'other')),
+    -- Which week of the schedule's cycle this block repeats in. Always 0 for a
+    -- one-week schedule. Kept below cycle_weeks by the application, which
+    -- holds the schedule row locked whenever it writes either.
+    week_index   smallint NOT NULL DEFAULT 0 CHECK (week_index >= 0),
     start_minute integer NOT NULL,
     end_minute   integer NOT NULL,
     created_at   timestamptz NOT NULL DEFAULT now(),
@@ -103,7 +123,7 @@ CREATE TABLE blocks (
     )
 );
 
-CREATE INDEX blocks_schedule_start_idx ON blocks (schedule_id, start_minute);
+CREATE INDEX blocks_schedule_start_idx ON blocks (schedule_id, week_index, start_minute);
 
 
 -- Friendship is symmetric, so storing it twice would mean two rows that can

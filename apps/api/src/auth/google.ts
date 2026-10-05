@@ -71,7 +71,8 @@ export function createGoogleVerifier(allowedClientIds: readonly string[]): Googl
       }
 
       // An unverified Google email would let someone claim an address they do
-      // not own, and friend requests are addressed by email.
+      // not own, and a matching email is how a second sign-in method is linked
+      // to an existing account.
       if (payload.email_verified !== true) {
         throw unauthenticated("This Google account's email is not verified");
       }

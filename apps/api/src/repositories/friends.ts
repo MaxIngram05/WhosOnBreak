@@ -11,7 +11,7 @@ import type { Friend, FriendshipStatus } from "@whosonbreak/contracts";
 import type { Sql } from "../db/sql.ts";
 import { PG_ERROR, isPgError, queryOne } from "../db/sql.ts";
 import { badRequest, conflict, notFound } from "../http/errors.ts";
-import { toPublicUser, type UserRow } from "./users.ts";
+import { toPublicUser, type PublicUserRow } from "./users.ts";
 
 /** The pair in the order the table's CHECK constraint requires. */
 function canonical(a: string, b: string): [string, string] {
@@ -136,14 +136,19 @@ export async function removeFriendship(
   otherUserId: string,
 ): Promise<void> {
   const [userA, userB] = canonical(userId, otherUserId);
+  // A block is not this user's to lift by "unfriending": deleting that row
+  // would let the blocked person send a fresh request.
   const deleted = await sql.query<{ id: string }>(
-    `DELETE FROM friendships WHERE user_a = $1 AND user_b = $2 RETURNING id`,
+    `DELETE FROM friendships
+      WHERE user_a = $1 AND user_b = $2 AND status <> 'blocked'
+      RETURNING id`,
     [userA, userB],
   );
   if (deleted.length === 0) throw notFound("You are not friends");
 }
 
-interface FriendListRow extends UserRow {
+interface FriendListRow extends PublicUserRow {
+  friendship_id: string;
   status: FriendshipStatus;
   requested_by: string;
   since: Date | string;
@@ -153,25 +158,49 @@ interface FriendListRow extends UserRow {
  * Everyone connected to this user, pending included, with the other side of
  * each pair resolved regardless of which column they sit in.
  */
+const FRIEND_LIST_SELECT = `
+  SELECT f.id AS friendship_id, u.id, u.display_name, u.avatar_url,
+         f.status, f.requested_by, f.created_at AS since
+    FROM friendships f
+    JOIN users u
+      ON u.id = CASE WHEN f.user_a = $1 THEN f.user_b ELSE f.user_a END`;
+
+function toFriend(row: FriendListRow): Friend {
+  return {
+    id: row.friendship_id,
+    user: toPublicUser(row),
+    status: row.status,
+    requestedBy: row.requested_by,
+    since: iso(row.since),
+  };
+}
+
+/** One friendship as `viewerId` sees it, for answering the request that changed it. */
+export async function getFriendView(
+  sql: Sql,
+  viewerId: string,
+  friendshipId: string,
+): Promise<Friend> {
+  const row = await queryOne<FriendListRow>(
+    sql,
+    `${FRIEND_LIST_SELECT}
+      WHERE f.id = $2 AND $1 IN (f.user_a, f.user_b) AND f.status <> 'blocked'`,
+    [viewerId, friendshipId],
+  );
+  if (!row) throw notFound("No such friendship");
+  return toFriend(row);
+}
+
 export async function listFriends(sql: Sql, userId: string): Promise<Friend[]> {
   const rows = await sql.query<FriendListRow>(
-    `SELECT u.id, u.email, u.display_name, u.avatar_url, u.default_visibility,
-            u.created_at, f.status, f.requested_by, f.created_at AS since
-       FROM friendships f
-       JOIN users u
-         ON u.id = CASE WHEN f.user_a = $1 THEN f.user_b ELSE f.user_a END
+    `${FRIEND_LIST_SELECT}
       WHERE $1 IN (f.user_a, f.user_b)
         AND f.status <> 'blocked'
       ORDER BY f.status, u.display_name`,
     [userId],
   );
 
-  return rows.map((row) => ({
-    user: toPublicUser(row),
-    status: row.status,
-    requestedBy: row.requested_by,
-    since: iso(row.since),
-  }));
+  return rows.map(toFriend);
 }
 
 /**

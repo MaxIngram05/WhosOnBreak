@@ -11,7 +11,16 @@
  * cannot leak a block's name by forgetting to ask.
  */
 
-import { splitWeekWrap, type Interval } from "@whosonbreak/core";
+import {
+  anchorForCurrentWeek,
+  cycleWeekIndex,
+  formatCalendarDate,
+  mondayOf,
+  parseCalendarDate,
+  splitWeekWrap,
+  startOfWeekIn,
+  type Interval,
+} from "@whosonbreak/core";
 import type {
   Block,
   BlockInput,
@@ -21,7 +30,7 @@ import type {
 } from "@whosonbreak/contracts";
 import type { Sql } from "../db/sql.ts";
 import { placeholders, queryOne } from "../db/sql.ts";
-import { conflict, notFound } from "../http/errors.ts";
+import { badRequest, conflict, notFound } from "../http/errors.ts";
 
 export interface ScheduleRow {
   id: string;
@@ -29,6 +38,9 @@ export interface ScheduleRow {
   name: string;
   time_zone: string;
   is_active: boolean;
+  cycle_weeks: number;
+  /** YYYY-MM-DD; selected as text so no driver turns it into a local-midnight Date. */
+  cycle_anchor: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -38,22 +50,45 @@ export interface BlockRow {
   schedule_id: string;
   label: string | null;
   kind: BlockKind;
+  week_index: number;
   start_minute: number;
   end_minute: number;
 }
 
-const SCHEDULE_COLUMNS = `id, user_id, name, time_zone, is_active, created_at, updated_at`;
+const SCHEDULE_COLUMNS = `id, user_id, name, time_zone, is_active, cycle_weeks,
+  cycle_anchor::text AS cycle_anchor, created_at, updated_at`;
+
+const BLOCK_COLUMNS = `id, schedule_id, label, kind, week_index, start_minute, end_minute`;
 
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
-export function toSchedule(row: ScheduleRow): Schedule {
+/** Which week of its cycle a schedule is in at `instant`, by its own clock. */
+export function weekIndexAt(
+  schedule: { timeZone: string; cycleWeeks: number; cycleAnchor: string | null },
+  instant: Date,
+): number {
+  if (schedule.cycleWeeks === 1 || schedule.cycleAnchor === null) return 0;
+  return cycleWeekIndex(
+    parseCalendarDate(schedule.cycleAnchor),
+    startOfWeekIn(schedule.timeZone, instant),
+    schedule.cycleWeeks,
+  );
+}
+
+export function toSchedule(row: ScheduleRow, now: Date): Schedule {
   return {
     id: row.id,
     name: row.name,
     timeZone: row.time_zone,
     isActive: row.is_active,
+    cycleWeeks: row.cycle_weeks,
+    cycleAnchor: row.cycle_anchor,
+    currentWeekIndex: weekIndexAt(
+      { timeZone: row.time_zone, cycleWeeks: row.cycle_weeks, cycleAnchor: row.cycle_anchor },
+      now,
+    ),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
@@ -64,9 +99,51 @@ export function toBlock(row: BlockRow): Block {
     id: row.id,
     label: row.label,
     kind: row.kind,
+    weekIndex: row.week_index,
     start: row.start_minute,
     end: row.end_minute,
   };
+}
+
+/** Where the rotation stands, in whichever of the two forms the client used. */
+export interface CyclePosition {
+  currentWeekIndex?: number;
+  cycleAnchor?: string;
+}
+
+/**
+ * The anchor to store for a schedule, given what the client said.
+ *
+ * "This week is Week B" is resolved against this week *in the schedule's own
+ * zone*, so a Sunday-night edit in London is not read as Monday in Tokyo.
+ * With nothing said, an existing anchor is kept and a new rotation starts with
+ * this week as Week A -- the most likely truth, and fixable in one tap.
+ */
+function resolveAnchor(
+  cycleWeeks: number,
+  timeZone: string,
+  now: Date,
+  position: CyclePosition,
+  existing: string | null,
+): string | null {
+  if (cycleWeeks === 1) return null;
+
+  if (position.currentWeekIndex !== undefined) {
+    if (position.currentWeekIndex >= cycleWeeks) {
+      throw badRequest("That week is not part of this schedule's cycle", {
+        currentWeekIndex: [`Must be below ${cycleWeeks}`],
+      });
+    }
+    return formatCalendarDate(
+      anchorForCurrentWeek(startOfWeekIn(timeZone, now), position.currentWeekIndex),
+    );
+  }
+
+  if (position.cycleAnchor !== undefined) {
+    return formatCalendarDate(mondayOf(parseCalendarDate(position.cycleAnchor)));
+  }
+
+  return existing ?? formatCalendarDate(startOfWeekIn(timeZone, now));
 }
 
 export function listSchedulesForUser(sql: Sql, userId: string): Promise<ScheduleRow[]> {
@@ -97,8 +174,8 @@ export function findOwnedSchedule(
 
 export function listBlocks(sql: Sql, scheduleId: string): Promise<BlockRow[]> {
   return sql.query<BlockRow>(
-    `SELECT id, schedule_id, label, kind, start_minute, end_minute
-       FROM blocks WHERE schedule_id = $1 ORDER BY start_minute`,
+    `SELECT ${BLOCK_COLUMNS}
+       FROM blocks WHERE schedule_id = $1 ORDER BY week_index, start_minute`,
     [scheduleId],
   );
 }
@@ -109,37 +186,55 @@ export function listBlocks(sql: Sql, scheduleId: string): Promise<BlockRow[]> {
  * `splitWeekWrap` is the whole reason this is a function: a block running past
  * Sunday midnight becomes two rows, which keeps the CHECK constraint true and
  * means no reader downstream ever has to reason about wrap.
+ *
+ * In a multi-week cycle the part after midnight belongs to the *next* week of
+ * the cycle -- a Week A night shift ends on a Week B Monday -- so the wrapped
+ * piece moves on one week rather than back to the start of its own.
  */
-function toBlockRows(scheduleId: string, blocks: readonly BlockInput[]): unknown[][] {
+function toBlockRows(
+  scheduleId: string,
+  cycleWeeks: number,
+  blocks: readonly BlockInput[],
+): unknown[][] {
   const rows: unknown[][] = [];
 
-  for (const block of blocks) {
+  blocks.forEach((block, position) => {
+    if (block.weekIndex >= cycleWeeks) {
+      throw badRequest("A block is in a week this schedule does not have", {
+        [`blocks.${position}.weekIndex`]: [`Must be below ${cycleWeeks}`],
+      });
+    }
+
     const pieces: Interval[] = splitWeekWrap({ start: block.start, end: block.end });
     for (const piece of pieces) {
+      const wrapped = piece.start < block.start;
       rows.push([
         scheduleId,
         block.label?.trim() ? block.label.trim() : null,
         block.kind,
+        wrapped ? (block.weekIndex + 1) % cycleWeeks : block.weekIndex,
         piece.start,
         piece.end,
       ]);
     }
-  }
+  });
+
   return rows;
 }
 
 async function insertBlocks(
   sql: Sql,
   scheduleId: string,
+  cycleWeeks: number,
   blocks: readonly BlockInput[],
 ): Promise<void> {
-  const rows = toBlockRows(scheduleId, blocks);
+  const rows = toBlockRows(scheduleId, cycleWeeks, blocks);
   if (rows.length === 0) return;
 
   // One statement for the whole week rather than one per block.
   await sql.query(
-    `INSERT INTO blocks (schedule_id, label, kind, start_minute, end_minute)
-     VALUES ${placeholders(rows.length, 5)}`,
+    `INSERT INTO blocks (schedule_id, label, kind, week_index, start_minute, end_minute)
+     VALUES ${placeholders(rows.length, 6)}`,
     rows.flat(),
   );
 }
@@ -158,37 +253,81 @@ async function deactivateOthers(
   );
 }
 
+export interface CreateScheduleInput extends CyclePosition {
+  name: string;
+  timeZone: string;
+  isActive: boolean;
+  cycleWeeks: number;
+  blocks: BlockInput[];
+}
+
 export async function createSchedule(
   sql: Sql,
   userId: string,
-  input: { name: string; timeZone: string; isActive: boolean; blocks: BlockInput[] },
+  input: CreateScheduleInput,
+  now: Date,
 ): Promise<{ schedule: ScheduleRow; blocks: BlockRow[] }> {
+  const anchor = resolveAnchor(input.cycleWeeks, input.timeZone, now, input, null);
+
   return sql.transaction(async (tx) => {
     if (input.isActive) await deactivateOthers(tx, userId, null);
 
     const schedule = await queryOne<ScheduleRow>(
       tx,
-      `INSERT INTO schedules (user_id, name, time_zone, is_active)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO schedules (user_id, name, time_zone, is_active, cycle_weeks, cycle_anchor)
+       VALUES ($1, $2, $3, $4, $5, $6::date)
        RETURNING ${SCHEDULE_COLUMNS}`,
-      [userId, input.name, input.timeZone, input.isActive],
+      [userId, input.name, input.timeZone, input.isActive, input.cycleWeeks, anchor],
     );
     if (!schedule) throw new Error("Schedule insert returned nothing");
 
-    await insertBlocks(tx, schedule.id, input.blocks);
+    await insertBlocks(tx, schedule.id, input.cycleWeeks, input.blocks);
     return { schedule, blocks: await listBlocks(tx, schedule.id) };
   });
+}
+
+export interface UpdateScheduleInput extends CyclePosition {
+  name?: string;
+  timeZone?: string;
+  isActive?: true;
+  cycleWeeks?: number;
 }
 
 export async function updateSchedule(
   sql: Sql,
   userId: string,
   scheduleId: string,
-  changes: { name?: string; timeZone?: string; isActive?: true },
+  changes: UpdateScheduleInput,
+  now: Date,
 ): Promise<ScheduleRow> {
   return sql.transaction(async (tx) => {
-    const existing = await findOwnedSchedule(tx, scheduleId, userId);
+    // Locked, because the block-week check below has to hold until commit: a
+    // concurrent block save must not slip a Week B block in after it.
+    const existing = await queryOne<ScheduleRow>(
+      tx,
+      `SELECT ${SCHEDULE_COLUMNS} FROM schedules
+        WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+      [scheduleId, userId],
+    );
     if (!existing) throw notFound("No such schedule");
+
+    const cycleWeeks = changes.cycleWeeks ?? existing.cycle_weeks;
+    const timeZone = changes.timeZone ?? existing.time_zone;
+
+    if (cycleWeeks < existing.cycle_weeks) {
+      // Refused rather than quietly deleting a week of someone's timetable.
+      const stranded = await queryOne<{ count: number }>(
+        tx,
+        `SELECT count(*)::int AS count FROM blocks
+          WHERE schedule_id = $1 AND week_index >= $2`,
+        [scheduleId, cycleWeeks],
+      );
+      if (stranded && stranded.count > 0) {
+        throw conflict("Remove the blocks in the weeks being dropped first");
+      }
+    }
+
+    const anchor = resolveAnchor(cycleWeeks, timeZone, now, changes, existing.cycle_anchor);
 
     if (changes.isActive) await deactivateOthers(tx, userId, scheduleId);
 
@@ -204,6 +343,11 @@ export async function updateSchedule(
       assignments.push(`time_zone = $${params.length}`);
     }
     if (changes.isActive) assignments.push(`is_active = true`);
+
+    params.push(cycleWeeks);
+    assignments.push(`cycle_weeks = $${params.length}`);
+    params.push(anchor);
+    assignments.push(`cycle_anchor = $${params.length}::date`);
 
     assignments.push(`updated_at = now()`);
     params.push(scheduleId);
@@ -266,7 +410,7 @@ export async function replaceBlocks(
     }
 
     await tx.query(`DELETE FROM blocks WHERE schedule_id = $1`, [scheduleId]);
-    await insertBlocks(tx, scheduleId, blocks);
+    await insertBlocks(tx, scheduleId, existing.cycle_weeks, blocks);
 
     const updated = await queryOne<ScheduleRow>(
       tx,
@@ -284,6 +428,9 @@ export interface ComparableSchedule {
   userId: string;
   scheduleId: string;
   timeZone: string;
+  cycleWeeks: number;
+  cycleAnchor: string | null;
+  /** Every week of the cycle; the caller picks the week it is resolving. */
   blocks: Block[];
 }
 
@@ -291,10 +438,13 @@ interface ComparableRow {
   user_id: string;
   schedule_id: string;
   time_zone: string;
+  cycle_weeks: number;
+  cycle_anchor: string | null;
   default_visibility: Visibility;
   block_id: string | null;
   label: string | null;
   kind: BlockKind | null;
+  week_index: number | null;
   start_minute: number | null;
   end_minute: number | null;
 }
@@ -321,17 +471,20 @@ export async function loadComparableSchedules(
     `SELECT s.user_id,
             s.id                AS schedule_id,
             s.time_zone,
+            s.cycle_weeks,
+            s.cycle_anchor::text AS cycle_anchor,
             u.default_visibility,
             b.id                AS block_id,
             b.label,
             b.kind,
+            b.week_index,
             b.start_minute,
             b.end_minute
        FROM schedules s
        JOIN users u  ON u.id = s.user_id
        LEFT JOIN blocks b ON b.schedule_id = s.id
       WHERE s.user_id = ANY($1::uuid[]) AND s.is_active
-      ORDER BY s.user_id, b.start_minute`,
+      ORDER BY s.user_id, b.week_index, b.start_minute`,
     [userIds],
   );
 
@@ -344,6 +497,8 @@ export async function loadComparableSchedules(
         userId: row.user_id,
         scheduleId: row.schedule_id,
         timeZone: row.time_zone,
+        cycleWeeks: row.cycle_weeks,
+        cycleAnchor: row.cycle_anchor,
         blocks: [],
       };
       byUser.set(row.user_id, entry);
@@ -362,6 +517,7 @@ export async function loadComparableSchedules(
       id: row.block_id,
       label: maySeeLabel ? row.label : null,
       kind: row.kind ?? "other",
+      weekIndex: row.week_index ?? 0,
       start: row.start_minute,
       end: row.end_minute,
     });

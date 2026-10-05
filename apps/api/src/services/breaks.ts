@@ -14,7 +14,9 @@ import {
   DEFAULT_DAY_WINDOW,
   contains,
   findBreaks,
+  formatCalendarDate,
   freeTime,
+  MINUTES_PER_DAY,
   nowAsMinuteOfWeek,
   shiftToZone,
   startOfWeekIn,
@@ -26,12 +28,18 @@ import {
   type ParticipantSchedule,
 } from "@whosonbreak/core";
 import type {
+  Block,
   BreakQuery,
   BreaksResponse,
   OnBreakNowResponse,
   PublicUser,
 } from "@whosonbreak/contracts";
-import type { ComparableSchedule } from "../repositories/schedules.ts";
+import type { Sql } from "../db/sql.ts";
+import {
+  loadComparableSchedules,
+  weekIndexAt,
+  type ComparableSchedule,
+} from "../repositories/schedules.ts";
 
 /** A person we were asked about, whether or not they have a schedule. */
 export interface Candidate {
@@ -39,10 +47,23 @@ export interface Candidate {
   schedule: ComparableSchedule | undefined;
 }
 
-function formatCalendarDate(date: CalendarDate): string {
-  const month = String(date.month).padStart(2, "0");
-  const day = String(date.day).padStart(2, "0");
-  return `${date.year}-${month}-${day}`;
+/**
+ * Pairs each person with their active schedule -- one query for all of them,
+ * however many there are. Who may be asked about is the caller's decision and
+ * must already have been made.
+ */
+export async function loadCandidates(
+  sql: Sql,
+  users: readonly PublicUser[],
+  viewerId: string,
+): Promise<Candidate[]> {
+  const schedules = await loadComparableSchedules(
+    sql,
+    users.map((user) => user.id),
+    viewerId,
+  );
+  const byUser = new Map(schedules.map((schedule) => [schedule.userId, schedule]));
+  return users.map((user) => ({ user, schedule: byUser.get(user.id) }));
 }
 
 const WEDNESDAY_NOON = 3 * 24 * 60 + 12 * 60;
@@ -89,6 +110,26 @@ export function resolveViewerZone(
   return query.timeZone ?? viewerSchedule?.timeZone ?? "UTC";
 }
 
+/**
+ * The blocks that apply in the week being resolved: all of them for a one-week
+ * schedule, and only Week A's or Week B's for a rotating one.
+ *
+ * The week is read in the schedule's own zone, which is the same week
+ * `shiftToZone` projects from. One approximation is accepted: when zones differ,
+ * a block shifted across the week boundary wraps onto the same cycle week
+ * rather than the neighbouring one. That only touches the few hours around
+ * Sunday midnight that the offset spans, which sit outside any sane day window.
+ */
+function blocksForWeek(schedule: ComparableSchedule, reference: Date): Block[] {
+  if (schedule.cycleWeeks === 1) return schedule.blocks;
+  const week = weekIndexAt(schedule, reference);
+  return schedule.blocks.filter((block) => block.weekIndex === week);
+}
+
+function toIntervals(blocks: readonly Block[]): Interval[] {
+  return blocks.map((block) => ({ start: block.start, end: block.end }));
+}
+
 /** Each candidate's busy time, expressed on the viewer's axis. */
 function toParticipants(
   candidates: readonly Candidate[],
@@ -100,10 +141,7 @@ function toParticipants(
   for (const candidate of candidates) {
     if (!candidate.schedule) continue;
 
-    const busy: Interval[] = candidate.schedule.blocks.map((block) => ({
-      start: block.start,
-      end: block.end,
-    }));
+    const busy = toIntervals(blocksForWeek(candidate.schedule, reference));
 
     participants.push({
       userId: candidate.user.id,
@@ -185,7 +223,7 @@ export function computeOnBreakNow(input: OnBreakNowInput): OnBreakNowResponse {
   const nowMinute = nowAsMinuteOfWeek(viewerZone, input.now);
 
   const onBreak: OnBreakNowResponse["onBreak"] = [];
-  const busy: PublicUser[] = [];
+  const busy: OnBreakNowResponse["busy"] = [];
   const unknown: PublicUser[] = [];
 
   for (const candidate of input.candidates) {
@@ -194,12 +232,9 @@ export function computeOnBreakNow(input: OnBreakNowInput): OnBreakNowResponse {
       continue;
     }
 
-    const shifted = shiftToZone(
-      candidate.schedule.blocks.map((block) => ({ start: block.start, end: block.end })),
-      candidate.schedule.timeZone,
-      viewerZone,
-      reference,
-    );
+    const { timeZone } = candidate.schedule;
+    const blocks = blocksForWeek(candidate.schedule, reference);
+    const shifted = shiftToZone(toIntervals(blocks), timeZone, viewerZone, reference);
 
     const free = freeTime(shifted, window);
     const current = free.find((span) => contains(span, nowMinute));
@@ -213,7 +248,24 @@ export function computeOnBreakNow(input: OnBreakNowInput): OnBreakNowResponse {
     } else {
       // Either in a class, or outside the reporting window entirely -- asleep
       // counts as unavailable, which is the honest answer.
-      busy.push(candidate.user);
+      const today = Math.floor(nowMinute / MINUTES_PER_DAY);
+      const next = free.find((span) => span.start > nowMinute);
+
+      // Shifted one at a time so a label stays attached to its own interval.
+      // Labels were already stripped by the repository wherever the owner's
+      // visibility forbids them, so this cannot reveal one by accident.
+      const inBlock = blocks.find((block) =>
+        shiftToZone([block], timeZone, viewerZone, reference).some((span) =>
+          contains(span, nowMinute),
+        ),
+      );
+
+      busy.push({
+        ...candidate.user,
+        until:
+          next && Math.floor(next.start / MINUTES_PER_DAY) === today ? next.start : null,
+        label: inBlock?.label ?? null,
+      });
     }
   }
 

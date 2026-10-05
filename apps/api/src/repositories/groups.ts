@@ -20,7 +20,7 @@ import type { Sql } from "../db/sql.ts";
 import { PG_ERROR, isPgError, queryOne } from "../db/sql.ts";
 import { conflict, forbidden, notFound } from "../http/errors.ts";
 import { randomCode } from "../auth/tokens.ts";
-import { toPublicUser, type UserRow } from "./users.ts";
+import { toPublicUser, type PublicUserRow } from "./users.ts";
 
 export interface GroupRow {
   id: string;
@@ -159,7 +159,7 @@ export async function joinGroupByCode(
   });
 }
 
-interface MemberRow extends UserRow {
+interface MemberRow extends PublicUserRow {
   role: GroupRole;
   joined_at: Date | string;
   has_schedule: boolean;
@@ -170,8 +170,7 @@ export async function listGroupMembers(
   groupId: string,
 ): Promise<GroupMember[]> {
   const rows = await sql.query<MemberRow>(
-    `SELECT u.id, u.email, u.display_name, u.avatar_url, u.default_visibility,
-            u.created_at, gm.role, gm.joined_at,
+    `SELECT u.id, u.display_name, u.avatar_url, gm.role, gm.joined_at,
             EXISTS (
               SELECT 1 FROM schedules s WHERE s.user_id = u.id AND s.is_active
             ) AS has_schedule
@@ -234,7 +233,7 @@ export async function removeGroupMember(
     throw forbidden("Only the group owner can remove other people");
   }
   if (targetId === group.owner_id) {
-    throw conflict("The owner cannot leave their own group");
+    throw conflict("The owner cannot leave their own group; close it instead");
   }
 
   const deleted = await sql.query<{ user_id: string }>(
@@ -266,4 +265,36 @@ export async function rotateJoinCode(
   }
 
   throw new Error("Could not allocate a unique join code");
+}
+
+/**
+ * Closes a group. Owner only, and the way an owner leaves: the group stops
+ * appearing for everyone and its code stops working, but the rows stay, so an
+ * accidental archive is a support fix rather than a data loss.
+ */
+export async function archiveGroup(sql: Sql, groupId: string, actorId: string): Promise<void> {
+  const group = await requireMembership(sql, groupId, actorId);
+  if (group.role !== "owner") {
+    throw forbidden("Only the group owner can close the group");
+  }
+  await sql.query(`UPDATE groups SET archived_at = now() WHERE id = $1`, [groupId]);
+}
+
+/**
+ * Whether two people are in at least one open group together -- the condition
+ * for sending someone a friend request by id rather than by their code.
+ */
+export async function shareAGroup(sql: Sql, a: string, b: string): Promise<boolean> {
+  const row = await queryOne<{ shared: boolean }>(
+    sql,
+    `SELECT EXISTS (
+       SELECT 1
+         FROM group_members mine
+         JOIN group_members theirs ON theirs.group_id = mine.group_id
+         JOIN groups g ON g.id = mine.group_id
+        WHERE mine.user_id = $1 AND theirs.user_id = $2 AND g.archived_at IS NULL
+     ) AS shared`,
+    [a, b],
+  );
+  return row?.shared ?? false;
 }
