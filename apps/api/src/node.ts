@@ -15,7 +15,7 @@ import { loadConfig } from "./config.ts";
 import { createGoogleVerifier } from "./auth/google.ts";
 import { isPgliteUrl, openDatabase } from "./db/open.ts";
 import { applyMigrations, loadMigrations } from "./db/migrate.ts";
-import { describeSeed, devSession, seed } from "./dev/seed.ts";
+import { describeSeed, seed } from "./dev/seed.ts";
 import { memoryRateLimiter } from "./http/rate-limit.ts";
 
 const config = loadConfig({ ENVIRONMENT: "development", ...process.env });
@@ -32,13 +32,7 @@ if (isPgliteUrl(config.databaseUrl)) {
 }
 
 if (process.env.SEED === "1") {
-  const now = new Date();
-  const result = await seed(db, now);
-  const tokens: Record<string, string> = {};
-  for (const [key, user] of Object.entries(result.users)) {
-    tokens[key] = (await devSession(db, config, user, now)).accessToken;
-  }
-  console.log(describeSeed(result, tokens, `http://localhost:${port}`));
+  console.log(describeSeed(await seed(db, new Date())));
 }
 
 const google = createGoogleVerifier(config.googleClientIds);

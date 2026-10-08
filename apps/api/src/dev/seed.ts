@@ -1,75 +1,144 @@
 /**
- * Demo data for trying the API by hand: three people, one group, one
- * friendship, and schedules whose shared breaks can be checked on paper.
+ * A sample class to try the app with: eight people on Montreal time, in one
+ * group whose join code is always BREAKS.
  *
- *   Ada    Europe/London    Mon-Fri 09:00-12:00 and 13:00-16:00
- *   Ben    Europe/London    Mon-Fri 09:00-11:00 and 12:30-16:00
- *   Cleo   America/New_York Mon-Fri 08:00-10:00 (13:00-15:00 London time in winter)
+ * Everyone is created with a dev identity named after them, so on a
+ * development server you can sign in *as* any of them by typing their name --
+ * "Ada" on a second phone is the sample Ada, owner of the group. That is how
+ * to test both sides of anything: invites, permissions, friend requests.
  *
- * All three are in "Demo group". In London time on a winter weekday, Ada and
- * Ben are both free 08:00-09:00, 12:00-12:30 and 16:00-22:00, and Cleo is free
- * through all of those too -- her shift falls inside Ada's lab and Ben's
- * studio -- so every shared break has all three in it.
+ *   Ada    owner, shows everything (full)
+ *   Ben    shows names (labels)
+ *   Cleo   on exchange in London, so her week is shifted onto Montreal time
+ *   Dev    works shifts as well as classes
+ *   Ella   shows everything (full)
+ *   Finn   two-week timetable (Week A / Week B)
+ *   Gia    shows busy times only (the default)
+ *   Hugo   joined but has not added a schedule
  *
- * Users are created as if they had signed in with Google, through the same
- * repository function a real sign-in uses, so nothing here is a back door.
+ * Safe to run on every start: people, schedules and the group are only
+ * created when missing, so nobody's edits are overwritten.
  */
 
 import { Weekday, clock, toMinuteOfWeek } from "@whosonbreak/core";
-import type { BlockInput } from "@whosonbreak/contracts";
-import type { Config } from "../config.ts";
+import type { BlockInput, BlockKind, Visibility } from "@whosonbreak/contracts";
 import type { Sql } from "../db/sql.ts";
-import { generateRefreshToken, signAccessToken } from "../auth/tokens.ts";
-import { findOrCreateUserForIdentity, type UserRow } from "../repositories/users.ts";
+import { queryOne } from "../db/sql.ts";
+import { findOrCreateUserForIdentity, updateUser, type UserRow } from "../repositories/users.ts";
 import { createSchedule, listSchedulesForUser } from "../repositories/schedules.ts";
 import { createGroup, joinGroupByCode } from "../repositories/groups.ts";
-import { acceptFriendship, requestFriendship } from "../repositories/friends.ts";
-import { storeRefreshToken } from "../repositories/sessions.ts";
+import { acceptFriendship, findFriendship, requestFriendship } from "../repositories/friends.ts";
 
-const WEEKDAYS = [
-  Weekday.Monday,
-  Weekday.Tuesday,
-  Weekday.Wednesday,
-  Weekday.Thursday,
-  Weekday.Friday,
-];
+/** The sample group's join code. Every letter is in the join-code alphabet. */
+export const SAMPLE_JOIN_CODE = "BREAKS";
 
-function everyWeekday(label: string, from: [number, number], to: [number, number]): BlockInput[] {
-  return WEEKDAYS.map((day) => ({
+const MONTREAL = "America/Toronto";
+const { Monday: MON, Tuesday: TUE, Wednesday: WED, Thursday: THU, Friday: FRI, Saturday: SAT } =
+  Weekday;
+
+function on(
+  days: number[],
+  from: [number, number],
+  to: [number, number],
+  label: string,
+  kind: BlockKind = "class",
+  weekIndex = 0,
+): BlockInput[] {
+  return days.map((day) => ({
     label,
-    kind: "class" as const,
-    weekIndex: 0,
-    start: toMinuteOfWeek(day, clock(...from)),
-    end: toMinuteOfWeek(day, clock(...to)),
+    kind,
+    weekIndex,
+    start: toMinuteOfWeek(day as Weekday, clock(...from)),
+    end: toMinuteOfWeek(day as Weekday, clock(...to)),
   }));
 }
 
-const PEOPLE = [
+interface SamplePerson {
+  name: string;
+  zone: string;
+  visibility: Visibility;
+  cycleWeeks?: number;
+  /** Omitted: has joined the group but never added a schedule. */
+  blocks?: BlockInput[];
+}
+
+const PEOPLE: SamplePerson[] = [
   {
-    key: "ada",
-    name: "Ada (demo)",
-    zone: "Europe/London",
+    name: "Ada",
+    zone: MONTREAL,
+    visibility: "full",
     blocks: [
-      ...everyWeekday("Morning lectures", [9, 0], [12, 0]),
-      ...everyWeekday("Lab", [13, 0], [16, 0]),
+      ...on([MON, WED], [10, 15], [11, 30], "COMP 248"),
+      ...on([MON, WED], [13, 15], [14, 30], "MATH 204"),
+      ...on([TUE, THU], [9, 0], [11, 45], "Physics lab"),
+      ...on([FRI], [10, 0], [12, 0], "Seminar"),
     ],
   },
   {
-    key: "ben",
-    name: "Ben (demo)",
-    zone: "Europe/London",
+    name: "Ben",
+    zone: MONTREAL,
+    visibility: "labels",
     blocks: [
-      ...everyWeekday("Seminar", [9, 0], [11, 0]),
-      ...everyWeekday("Studio", [12, 30], [16, 0]),
+      ...on([MON, WED, FRI], [8, 45], [10, 0], "ENGR 201"),
+      ...on([TUE, THU], [13, 0], [16, 0], "Design studio"),
+      ...on([WED], [17, 45], [20, 15], "Evening class"),
     ],
   },
   {
-    key: "cleo",
-    name: "Cleo (demo)",
-    zone: "America/New_York",
-    blocks: everyWeekday("Shift", [8, 0], [10, 0]),
+    name: "Cleo",
+    zone: "Europe/London",
+    visibility: "busy_only",
+    // 14:00-18:00 in London is 09:00-13:00 in Montreal.
+    blocks: on([MON, TUE, WED, THU], [14, 0], [18, 0], "Internship", "work"),
   },
-] as const;
+  {
+    name: "Dev",
+    zone: MONTREAL,
+    visibility: "labels",
+    blocks: [
+      ...on([MON], [9, 0], [12, 0], "COMP 249"),
+      ...on([TUE, THU], [11, 0], [17, 0], "Shift at the café", "work"),
+      ...on([SAT], [10, 0], [16, 0], "Shift at the café", "work"),
+    ],
+  },
+  {
+    name: "Ella",
+    zone: MONTREAL,
+    visibility: "full",
+    blocks: [
+      ...on([MON, TUE, WED, THU, FRI], [9, 0], [12, 0], "Lectures"),
+      ...on([FRI], [13, 0], [15, 0], "Tutoring", "other"),
+    ],
+  },
+  {
+    name: "Finn",
+    zone: MONTREAL,
+    visibility: "labels",
+    cycleWeeks: 2,
+    blocks: [
+      ...on([MON, WED, FRI], [9, 0], [12, 0], "Week A classes", "class", 0),
+      ...on([TUE, THU], [13, 0], [17, 0], "Week B labs", "class", 1),
+    ],
+  },
+  {
+    name: "Gia",
+    zone: MONTREAL,
+    visibility: "busy_only",
+    blocks: [
+      ...on([MON, WED], [15, 0], [18, 0], "Appointment", "other"),
+      ...on([TUE, THU], [8, 30], [10, 0], "Morning class"),
+    ],
+  },
+  { name: "Hugo", zone: MONTREAL, visibility: "busy_only" },
+];
+
+/** Who already knows whom, so the friend features have something in them. */
+const FRIENDSHIPS: [string, string][] = [
+  ["Ada", "Ben"],
+  ["Ada", "Ella"],
+  ["Ben", "Dev"],
+  ["Finn", "Gia"],
+];
 
 export interface SeedResult {
   users: Record<string, UserRow>;
@@ -77,93 +146,85 @@ export interface SeedResult {
   joinCode: string;
 }
 
-/** Idempotent for users and schedules; a second run adds a second group. */
+function slug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
 export async function seed(db: Sql, now: Date): Promise<SeedResult> {
   const users: Record<string, UserRow> = {};
 
   for (const person of PEOPLE) {
-    const { user } = await findOrCreateUserForIdentity(db, "google", {
-      subject: `seed-${person.key}`,
-      email: `${person.key}@example.invalid`,
+    // The same identity the dev sign-in route creates for this name, so the
+    // sample person and "sign in as Ada" are one account.
+    const { user, created } = await findOrCreateUserForIdentity(db, "dev", {
+      subject: slug(person.name),
+      email: `${slug(person.name)}@dev.invalid`,
       emailVerified: true,
       name: person.name,
       pictureUrl: null,
     });
-    users[person.key] = user;
+    users[person.name] = user;
 
-    const existing = await listSchedulesForUser(db, user.id);
-    if (existing.length === 0) {
+    if (created) {
+      await updateUser(db, user.id, { defaultVisibility: person.visibility });
+    }
+
+    if (person.blocks && (await listSchedulesForUser(db, user.id)).length === 0) {
       await createSchedule(
         db,
         user.id,
         {
-          name: "Demo term",
+          name: "Fall term",
           timeZone: person.zone,
           isActive: true,
-          cycleWeeks: 1,
-          blocks: [...person.blocks],
+          cycleWeeks: person.cycleWeeks ?? 1,
+          ...(person.cycleWeeks === 2 ? { currentWeekIndex: 0 } : {}),
+          blocks: person.blocks,
         },
         now,
       );
     }
   }
 
-  const ada = users.ada as UserRow;
-  const ben = users.ben as UserRow;
-  const cleo = users.cleo as UserRow;
+  const owner = users.Ada as UserRow;
 
-  const group = await createGroup(db, ada.id, { name: "Demo group", subtitle: "Seeded for development" });
-  await joinGroupByCode(db, ben.id, group.join_code);
-  await joinGroupByCode(db, cleo.id, group.join_code);
-
-  try {
-    const request = await requestFriendship(db, ada.id, ben.id);
-    if (request.status === "pending") await acceptFriendship(db, request.id, ben.id);
-  } catch {
-    // Already friends from an earlier run.
-  }
-
-  return { users, groupId: group.id, joinCode: group.join_code };
-}
-
-/**
- * A working access token for a seeded user, backed by a real stored session so
- * logout and refresh behave exactly as they would after a real sign-in.
- */
-export async function devSession(
-  db: Sql,
-  config: Config,
-  user: UserRow,
-  now: Date,
-): Promise<{ accessToken: string; refreshToken: string }> {
-  const refreshToken = generateRefreshToken();
-  const stored = await storeRefreshToken(db, {
-    userId: user.id,
-    token: refreshToken,
-    expiresAt: new Date(now.getTime() + config.refreshTokenTtlDays * 24 * 60 * 60_000),
-    userAgent: "seed script",
-  });
-  return {
-    accessToken: await signAccessToken(config, user.id, stored.familyId),
-    refreshToken,
-  };
-}
-
-export function describeSeed(result: SeedResult, tokens: Record<string, string>, base: string) {
-  const lines = [
-    "",
-    `Seeded "Demo group" (${result.groupId}), join code ${result.joinCode}.`,
-    "",
-  ];
-  for (const [key, user] of Object.entries(result.users)) {
-    lines.push(`${user.display_name}  friend code ${user.friend_code}`);
-    lines.push(`  TOKEN_${key.toUpperCase()}=${tokens[key]}`);
-  }
-  lines.push(
-    "",
-    "Try:",
-    `  curl -H "Authorization: Bearer $TOKEN_ADA" "${base}/v1/groups/${result.groupId}/breaks?week=2026-01-14"`,
-    "",
+  let group = await queryOne<{ id: string }>(
+    db,
+    `SELECT id FROM groups WHERE join_code = $1 AND archived_at IS NULL`,
+    [SAMPLE_JOIN_CODE],
   );
-  return lines.join("\n");
+  if (!group) {
+    const created = await createGroup(db, owner.id, {
+      name: "Sample class",
+      subtitle: "Test group · join with BREAKS",
+    });
+    await db.query(`UPDATE groups SET join_code = $2 WHERE id = $1`, [
+      created.id,
+      SAMPLE_JOIN_CODE,
+    ]);
+    group = { id: created.id };
+  }
+
+  for (const user of Object.values(users)) {
+    if (user.id !== owner.id) await joinGroupByCode(db, user.id, SAMPLE_JOIN_CODE);
+  }
+
+  for (const [a, b] of FRIENDSHIPS) {
+    const from = users[a] as UserRow;
+    const to = users[b] as UserRow;
+    if (await findFriendship(db, from.id, to.id)) continue;
+    const request = await requestFriendship(db, from.id, to.id);
+    if (request.status === "pending") await acceptFriendship(db, request.id, to.id);
+  }
+
+  return { users, groupId: group.id, joinCode: SAMPLE_JOIN_CODE };
+}
+
+export function describeSeed(result: SeedResult): string {
+  return [
+    "",
+    `Sample group ready. Join it in the app with the code ${result.joinCode}.`,
+    `People in it (sign in as any of them by name): ${Object.keys(result.users).join(", ")}.`,
+    "",
+  ].join("\n");
 }

@@ -1,5 +1,5 @@
 /**
- * Puts demo data into DATABASE_URL and prints a token for each demo user.
+ * Puts the sample group and its people into DATABASE_URL.
  *
  *   npm run migrate && npm run seed
  *
@@ -9,7 +9,7 @@
 
 import { loadConfig } from "../src/config.ts";
 import { openDatabase } from "../src/db/open.ts";
-import { describeSeed, devSession, seed } from "../src/dev/seed.ts";
+import { describeSeed, seed } from "../src/dev/seed.ts";
 
 const config = loadConfig({ ENVIRONMENT: "development", ...process.env });
 if (config.environment === "production") {
@@ -19,13 +19,7 @@ if (config.environment === "production") {
 
 const db = await openDatabase(config.databaseUrl);
 try {
-  const now = new Date();
-  const result = await seed(db, now);
-  const tokens: Record<string, string> = {};
-  for (const [key, user] of Object.entries(result.users)) {
-    tokens[key] = (await devSession(db, config, user, now)).accessToken;
-  }
-  console.log(describeSeed(result, tokens, process.env.API_URL ?? "http://localhost:8787"));
+  console.log(describeSeed(await seed(db, new Date())));
 } finally {
   await db.close();
 }

@@ -12,6 +12,7 @@ import {
   type DurableObjectNamespaceLike,
 } from "../src/http/rate-limit.ts";
 import { deleteExpiredTokens } from "../src/repositories/sessions.ts";
+import { SAMPLE_JOIN_CODE, seed } from "../src/dev/seed.ts";
 
 describe("token buckets", () => {
   it("allow a burst up to capacity, then refill over time", () => {
@@ -96,6 +97,37 @@ describe("dev sign-in", () => {
     expect(first.status).toBe(201);
     expect(again.status).toBe(200);
     expect(again.body.user.id).toBe(first.body.user.id);
+  });
+
+  it("signs in as the sample people, and the sample group survives a second seed", async () => {
+    const now = new Date();
+    await seed(dev.db, now);
+    const again = await seed(dev.db, now);
+
+    const groups = await dev.db.query(`SELECT id FROM groups WHERE join_code = $1`, [SAMPLE_JOIN_CODE]);
+    expect(groups).toHaveLength(1);
+
+    // "Ada" by dev sign-in is the seeded Ada, who owns the group.
+    const ada = await dev.request("POST", "/v1/auth/dev", { body: { name: "Ada" } });
+    const detail = await dev.request("GET", `/v1/groups/${again.groupId}`, {
+      token: ada.body.accessToken,
+    });
+    expect(detail.body).toMatchObject({ role: "owner", memberCount: 8 });
+
+    // Someone new joins with the code and sees shared breaks.
+    const visitor = await dev.request("POST", "/v1/auth/dev", {
+      body: { name: "Visitor", timeZone: "America/Toronto" },
+    });
+    const joined = await dev.request("POST", "/v1/groups/join", {
+      token: visitor.body.accessToken,
+      body: { code: "breaks" },
+    });
+    expect(joined.status).toBe(200);
+    const breaks = await dev.request("GET", `/v1/groups/${again.groupId}/breaks`, {
+      token: visitor.body.accessToken,
+    });
+    expect(breaks.body.segments.length).toBeGreaterThan(0);
+    expect(breaks.body.excluded.map((u: any) => u.displayName)).toContain("Hugo");
   });
 
   it("does not exist anywhere else", async () => {
