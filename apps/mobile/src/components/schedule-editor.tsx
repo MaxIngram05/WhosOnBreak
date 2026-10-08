@@ -25,6 +25,7 @@ import { ThemedText } from '@/components/themed-text';
 import {
   GridFrame,
   SNAP_MINUTES,
+  blockColor,
   byDay,
   gridStyles,
   layoutLanes,
@@ -182,6 +183,10 @@ function DraggableBlock({
 
   const top = minutesToPixels(block.start % MINUTES_PER_DAY);
   const height = minutesToPixels(block.end - block.start);
+  // Worked out here, not inside the animated style: that runs on the UI thread,
+  // where only worklets may be called, and minutesToPixels is not one. Calling
+  // it there was the crash when a newly added block was selected.
+  const minHeight = minutesToPixels(MIN_DURATION);
   const laneWidth = columnWidth / lanes;
 
   const dragMove = Gesture.Pan()
@@ -231,7 +236,7 @@ function DraggableBlock({
 
   const animated = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.get() }, { translateY: translateY.get() }],
-    height: Math.max(minutesToPixels(MIN_DURATION), height + extraHeight.get()),
+    height: Math.max(minHeight, height + extraHeight.get()),
   }));
 
   const shown = preview ?? block;
@@ -245,8 +250,10 @@ function DraggableBlock({
             top,
             left: lane * laneWidth + 1,
             width: laneWidth - 2,
-            backgroundColor: selected || dragging ? theme.blockActive : theme.block,
+            backgroundColor: blockColor(theme, block.kind),
             borderLeftColor: theme.blockBorder,
+            borderWidth: selected || dragging ? 2 : 0,
+            borderColor: theme.blockActive,
             zIndex: dragging ? 10 : selected ? 5 : 1,
             elevation: dragging ? 6 : 0,
           },
@@ -255,7 +262,7 @@ function DraggableBlock({
         <ThemedText numberOfLines={2} style={gridStyles.blockText}>
           {block.label || 'Busy'}
         </ThemedText>
-        <ThemedText numberOfLines={1} style={[gridStyles.blockTime, { color: theme.textSecondary }]}>
+        <ThemedText numberOfLines={1} style={gridStyles.blockTime}>
           {formatRange(shown.start, shown.end)}
         </ThemedText>
 

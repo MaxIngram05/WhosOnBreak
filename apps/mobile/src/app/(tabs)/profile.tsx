@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { Alert, Share } from 'react-native';
+import { Alert, Share, View } from 'react-native';
 import type { Visibility } from '@whosonbreak/contracts';
 
+import { ThemedText } from '@/components/themed-text';
 import {
+  Avatar,
   Button,
   Card,
   ErrorText,
@@ -11,8 +13,8 @@ import {
   Screen,
   Section,
   Segmented,
-  Title,
 } from '@/components/ui';
+import { Spacing } from '@/constants/theme';
 import { api, describeError } from '@/lib/api';
 import { useAuth, useMe } from '@/lib/auth';
 import { displayCode } from '@/lib/time';
@@ -20,7 +22,7 @@ import { displayCode } from '@/lib/time';
 const VISIBILITY_HELP: Record<Visibility, string> = {
   busy_only: "Others see when you're busy, but not what you're doing.",
   labels: 'Others also see the names of your blocks, like "Maths".',
-  full: 'Others see names and whether each block is a class, work, or something else.',
+  full: 'Others see names, and whether each block is a class, work or something else.',
 };
 
 export default function Profile() {
@@ -40,13 +42,20 @@ export default function Profile() {
 
   return (
     <Screen>
-      <Title subtitle={me.email}>Me</Title>
+      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: Spacing.four }}>
+        <Avatar seed={me.id} size={64} />
+        <View style={{ flex: 1 }}>
+          <ThemedText style={{ fontSize: 26, lineHeight: 32, fontWeight: 800 }}>{me.displayName}</ThemedText>
+          <Muted>{`Friend code ${displayCode(me.friendCode)}`}</Muted>
+        </View>
+      </View>
 
-      <Section title="Name">
+      <ErrorText>{error}</ErrorText>
+
+      <Section title="Your name">
         <Card>
           <Field value={name} onChangeText={setName} maxLength={60} />
           <Button
-            small
             title="Save name"
             disabled={!name.trim() || name.trim() === me.displayName}
             onPress={() => run(async () => setUser(await api.me.update({ displayName: name.trim() })))}
@@ -62,25 +71,33 @@ export default function Profile() {
             { value: 'full', label: 'Full' },
           ]}
           value={me.defaultVisibility}
-          onChange={(value) =>
-            run(async () => setUser(await api.me.update({ defaultVisibility: value })))
-          }
+          onChange={(value) => run(async () => setUser(await api.me.update({ defaultVisibility: value })))}
         />
-        <Muted>{VISIBILITY_HELP[me.defaultVisibility]}</Muted>
+        <Card>
+          <Muted>{VISIBILITY_HELP[me.defaultVisibility]}</Muted>
+        </Card>
       </Section>
 
       <Section title="Friend code">
-        <Muted>{`Yours is ${displayCode(me.friendCode)}. Get a new one if the old one has been shared too widely; requests already sent are not affected.`}</Muted>
-        <Button
-          kind="secondary"
-          title="Get a new friend code"
-          onPress={() => run(async () => setUser(await api.me.rotateFriendCode()))}
-        />
+        <Card>
+          <Muted>
+            Get a new code if yours has been shared too widely. Requests already sent are not affected.
+          </Muted>
+          <View style={{ marginTop: Spacing.three }}>
+            <Button
+              kind="secondary"
+              icon="refresh"
+              title="Get a new friend code"
+              onPress={() => run(async () => setUser(await api.me.rotateFriendCode()))}
+            />
+          </View>
+        </Card>
       </Section>
 
-      <Section title="Your data">
+      <Section title="Account">
         <Button
           kind="secondary"
+          icon="download"
           title="Export my data"
           onPress={() =>
             run(async () => {
@@ -89,9 +106,10 @@ export default function Profile() {
             })
           }
         />
-        <Button kind="secondary" title="Sign out" onPress={() => run(signOut)} />
+        <Button kind="secondary" icon="logout" title="Sign out" onPress={() => run(signOut)} />
         <Button
           kind="danger"
+          icon="delete-outline"
           title="Delete my account"
           onPress={() =>
             Alert.alert(
@@ -113,8 +131,6 @@ export default function Profile() {
           }
         />
       </Section>
-
-      <ErrorText>{error}</ErrorText>
     </Screen>
   );
 }

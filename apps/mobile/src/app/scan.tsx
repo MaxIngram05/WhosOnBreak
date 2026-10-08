@@ -19,11 +19,11 @@ export default function Scan() {
   // The scanner fires repeatedly while the code is in view; act on it once.
   const handled = useRef(false);
 
-  if (!permission) return <Screen><Muted>Checking camera permission…</Muted></Screen>;
+  if (!permission) return <Screen edges={[]}><Muted>Checking camera permission…</Muted></Screen>;
 
   if (!permission.granted) {
     return (
-      <Screen>
+      <Screen edges={[]}>
         <ThemedText style={{ marginBottom: Spacing.three }}>
           The camera is only used to read friend QR codes.
         </ThemedText>

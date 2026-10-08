@@ -45,6 +45,44 @@ export function weekParam(weeks: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** The Monday of the week `weeks` weeks from this one, on the phone's calendar. */
+function mondayOf(weeks: number): Date {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() - todayIndex() + weeks * 7);
+  return date;
+}
+
+/** "This week", "Next week", "Last week", or "Week of 19 Oct". */
+export function weekLabel(weeks: number): string {
+  if (weeks === 0) return 'This week';
+  if (weeks === 1) return 'Next week';
+  if (weeks === -1) return 'Last week';
+  const monday = mondayOf(weeks);
+  return `Week of ${monday.getDate()} ${MONTHS[monday.getMonth()]}`;
+}
+
+/** "5 – 11 Oct", or "29 Sep – 5 Oct" across a month. */
+export function weekRange(weeks: number): string {
+  const monday = mondayOf(weeks);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const start =
+    monday.getMonth() === sunday.getMonth()
+      ? `${monday.getDate()}`
+      : `${monday.getDate()} ${MONTHS[monday.getMonth()]}`;
+  return `${start} – ${sunday.getDate()} ${MONTHS[sunday.getMonth()]}`;
+}
+
+/** The calendar date of a day in the week `weeks` from this one: "Tue 14". */
+export function dayDate(weeks: number, day: number): string {
+  const date = mondayOf(weeks);
+  date.setDate(date.getDate() + day);
+  return `${dayName(day)} ${date.getDate()}`;
+}
+
 /** "AB12-CD34": the friend code the way people read it. */
 export function displayCode(code: string): string {
   return code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;

@@ -4,36 +4,48 @@
  */
 
 import { useState } from 'react';
-import { Pressable, ScrollView, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { router } from 'expo-router';
 import { MINUTES_PER_DAY } from '@whosonbreak/core';
 import type { BreaksResponse, GroupInvite, OnBreakNowResponse } from '@whosonbreak/contracts';
 
+import { AddSchedulePrompt, useNeedsSchedule } from '@/components/add-schedule-prompt';
 import { ThemedText } from '@/components/themed-text';
 import {
-  Avatar,
   Button,
   Card,
+  EmptyState,
   ErrorText,
+  List,
   Loading,
   Muted,
+  Person,
+  Pill,
   Row,
   Screen,
   Section,
   Title,
 } from '@/components/ui';
-import { Spacing } from '@/constants/theme';
+import { Palette, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { api, describeError } from '@/lib/api';
 import { useMe } from '@/lib/auth';
 import { formatDuration, formatRange, formatTime } from '@/lib/time';
 import { useLoad } from '@/lib/use-load';
 
+function greeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
 export default function Today() {
   const me = useMe();
   const theme = useTheme();
   const [groupId, setGroupId] = useState<string | null>(null);
 
+  const needsSchedule = useNeedsSchedule();
   const groups = useLoad(() => api.groups.list());
   const invites = useLoad(() => api.invites.list());
   const selected = groupId ?? groups.data?.[0]?.id ?? null;
@@ -50,7 +62,13 @@ export default function Today() {
     void status.reload();
   };
 
-  if (groups.loading && !groups.data) return <Screen><Loading /></Screen>;
+  if (groups.loading && !groups.data) {
+    return (
+      <Screen>
+        <Loading />
+      </Screen>
+    );
+  }
 
   const now = status.data?.now;
   const today = now ? Math.floor(now.nowMinuteOfWeek / MINUTES_PER_DAY) : 0;
@@ -62,39 +80,45 @@ export default function Today() {
             segment.end > now.nowMinuteOfWeek,
         )
       : [];
+  const othersFree = now ? now.onBreak.filter((person) => person.id !== me.id) : [];
 
   return (
     <Screen refreshing={status.loading} onRefresh={refresh}>
-      <Title subtitle={now ? `It's ${formatTime(now.nowMinuteOfWeek % MINUTES_PER_DAY, false)}` : undefined}>
-        Hi, {me.displayName.split(' ')[0]}
-      </Title>
+      <Title subtitle={greeting()}>{me.displayName.split(' ')[0]}</Title>
+
+      {needsSchedule ? <AddSchedulePrompt /> : null}
 
       <Invites invites={invites.data ?? []} onAnswered={refresh} />
 
       {groups.data && groups.data.length === 0 ? (
-        <Card>
-          <ThemedText type="smallBold">You&apos;re not in any groups yet</ThemedText>
+        <EmptyState icon="groups" title="You're not in any groups yet">
           <Muted>Join your class with its code, or start a group and share yours.</Muted>
-          <Button title="Go to Groups" onPress={() => router.navigate('/groups')} />
-        </Card>
+          <View style={{ marginTop: Spacing.three, alignSelf: 'stretch' }}>
+            <Button title="Find a group" icon="search" onPress={() => router.navigate('/groups')} />
+          </View>
+        </EmptyState>
       ) : null}
 
       {groups.data && groups.data.length > 1 ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: Spacing.three }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ marginBottom: Spacing.three, marginHorizontal: -Spacing.three - 4 }}
+          contentContainerStyle={{ paddingHorizontal: Spacing.three + 4, gap: Spacing.two }}>
           {groups.data.map((group) => {
             const active = group.id === selected;
             return (
               <Pressable
                 key={group.id}
                 onPress={() => setGroupId(group.id)}
-                style={{
-                  paddingHorizontal: Spacing.three,
-                  paddingVertical: Spacing.two,
-                  borderRadius: 20,
-                  marginRight: Spacing.two,
-                  backgroundColor: active ? theme.accent : theme.backgroundElement,
-                }}>
-                <ThemedText type="smallBold" style={{ color: active ? theme.onAccent : theme.text }}>
+                style={[
+                  styles.chip,
+                  {
+                    backgroundColor: active ? theme.ink : theme.backgroundElement,
+                    borderColor: active ? theme.ink : theme.border,
+                  },
+                ]}>
+                <ThemedText type="smallBold" style={{ color: active ? theme.onInk : theme.text }}>
                   {group.name}
                 </ThemedText>
               </Pressable>
@@ -107,63 +131,90 @@ export default function Today() {
 
       {now ? (
         <>
-          <Section title={`On break now · ${now.onBreak.length}`}>
-            {now.onBreak.length === 0 ? <Muted>Nobody is free right now.</Muted> : null}
-            {now.onBreak.map((person) => (
-              <Row
-                key={person.id}
-                onPress={() => router.push(`/person/${person.id}`)}
-                right={
-                  <ThemedText type="smallBold" style={{ color: theme.free }}>
-                    {formatDuration(person.freeForMinutes)} left
-                  </ThemedText>
-                }>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Avatar name={person.displayName} />
-                  <ThemedText>{person.id === me.id ? `${person.displayName} (you)` : person.displayName}</ThemedText>
-                </View>
-              </Row>
-            ))}
+          <View style={styles.hero}>
+            <ThemedText style={styles.heroNumber}>{othersFree.length}</ThemedText>
+            <View style={{ flex: 1 }}>
+              <ThemedText style={styles.heroTitle}>
+                {othersFree.length === 1 ? 'person is on break' : 'people are on break'}
+              </ThemedText>
+              <ThemedText style={styles.heroSub}>
+                {`right now · ${formatTime(now.nowMinuteOfWeek % MINUTES_PER_DAY, false)}`}
+              </ThemedText>
+            </View>
+          </View>
+
+          <Section title="Free now">
+            {now.onBreak.length === 0 ? (
+              <Card>
+                <Muted>Nobody is free right now.</Muted>
+              </Card>
+            ) : (
+              <List>
+                {now.onBreak.map((person, index) => (
+                  <Row
+                    key={person.id}
+                    last={index === now.onBreak.length - 1}
+                    onPress={() => router.push(`/person/${person.id}`)}
+                    right={<Pill tone="free">{`${formatDuration(person.freeForMinutes)} left`}</Pill>}>
+                    <Person id={person.id} name={person.displayName} you={person.id === me.id} />
+                  </Row>
+                ))}
+              </List>
+            )}
           </Section>
 
           <Section title="Shared breaks later today">
-            {upcoming.length === 0 ? <Muted>No more shared breaks today.</Muted> : null}
-            {upcoming.map((segment) => (
-              <Card key={`${segment.start}-${segment.end}`}>
-                <ThemedText type="smallBold">
-                  {formatRange(segment.start, segment.end)} · {formatDuration(segment.durationMinutes)}
-                </ThemedText>
-                <Muted>{segment.users.map((user) => user.displayName).join(', ')}</Muted>
+            {upcoming.length === 0 ? (
+              <Card>
+                <Muted>No more shared breaks today.</Muted>
               </Card>
-            ))}
+            ) : (
+              upcoming.map((segment) => (
+                <Card key={`${segment.start}-${segment.end}`}>
+                  <View style={styles.breakHeader}>
+                    <ThemedText style={{ fontWeight: 700 }}>
+                      {formatRange(segment.start, segment.end)}
+                    </ThemedText>
+                    <Pill>{formatDuration(segment.durationMinutes)}</Pill>
+                  </View>
+                  <Muted>{segment.users.map((user) => user.displayName).join(', ')}</Muted>
+                </Card>
+              ))
+            )}
           </Section>
 
-          <Section title={`Busy · ${now.busy.length}`}>
-            {now.busy.map((person) => (
-              <Row
-                key={person.id}
-                onPress={() => router.push(`/person/${person.id}`)}
-                right={
-                  <Muted>
-                    {person.until !== null
-                      ? `free at ${formatTime(person.until % MINUTES_PER_DAY, false)}`
-                      : 'done for today'}
-                  </Muted>
-                }>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Avatar name={person.displayName} />
-                  <View>
-                    <ThemedText>{person.displayName}</ThemedText>
-                    {person.label ? <Muted>{person.label}</Muted> : null}
-                  </View>
-                </View>
-              </Row>
-            ))}
-          </Section>
+          {now.busy.length > 0 ? (
+            <Section title="Busy">
+              <List>
+                {now.busy.map((person, index) => (
+                  <Row
+                    key={person.id}
+                    last={index === now.busy.length - 1}
+                    onPress={() => router.push(`/person/${person.id}`)}
+                    right={
+                      <Pill tone="busy">
+                        {person.until !== null
+                          ? `free ${formatTime(person.until % MINUTES_PER_DAY, false)}`
+                          : 'done today'}
+                      </Pill>
+                    }>
+                    <Person
+                      id={person.id}
+                      name={person.displayName}
+                      you={person.id === me.id}
+                      detail={person.label ?? undefined}
+                    />
+                  </Row>
+                ))}
+              </List>
+            </Section>
+          ) : null}
 
           {now.unknown.length > 0 ? (
             <Section title="Haven't added a schedule">
-              <Muted>{now.unknown.map((user) => user.displayName).join(', ')}</Muted>
+              <Card>
+                <Muted>{now.unknown.map((user) => user.displayName).join(', ')}</Muted>
+              </Card>
             </Section>
           ) : null}
         </>
@@ -190,13 +241,13 @@ function Invites({ invites, onAnswered }: { invites: GroupInvite[]; onAnswered: 
     <Section title="Invites">
       {invites.map((invite) => (
         <Card key={invite.id}>
-          <ThemedText type="smallBold">
-            {invite.inviter.displayName} invited you to {invite.group.name}
-          </ThemedText>
-          {invite.group.subtitle ? <Muted>{invite.group.subtitle}</Muted> : null}
-          <View style={{ flexDirection: 'row', gap: Spacing.two, marginTop: Spacing.two }}>
+          <ThemedText style={{ fontWeight: 700 }}>{invite.group.name}</ThemedText>
+          <Muted>
+            {`${invite.inviter.displayName} invited you${invite.group.subtitle ? ` · ${invite.group.subtitle}` : ''}`}
+          </Muted>
+          <View style={{ flexDirection: 'row', gap: Spacing.two, marginTop: Spacing.three }}>
             <Button small title="Join" onPress={() => answer(invite, true)} />
-            <Button small kind="secondary" title="Decline" onPress={() => answer(invite, false)} />
+            <Button small kind="secondary" title="No thanks" onPress={() => answer(invite, false)} />
           </View>
         </Card>
       ))}
@@ -204,3 +255,42 @@ function Invites({ invites, onAnswered }: { invites: GroupInvite[]; onAnswered: 
     </Section>
   );
 }
+
+const styles = StyleSheet.create({
+  chip: {
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+  },
+  hero: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    backgroundColor: Palette.navy,
+    borderRadius: 22,
+    padding: Spacing.four,
+    marginBottom: Spacing.four,
+  },
+  heroNumber: {
+    color: Palette.orange,
+    fontSize: 52,
+    lineHeight: 58,
+    fontWeight: 800,
+  },
+  heroTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: 700,
+  },
+  heroSub: {
+    color: Palette.periwinkle,
+  },
+  breakHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+});

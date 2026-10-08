@@ -1,47 +1,61 @@
 /**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
+ * The palette, taken from the app's artwork: a quiet blue base, black for the
+ * things you press, and the artwork's sky, periwinkle and orange as accents.
+ *
+ * One light theme for now (app.json pins userInterfaceStyle to light). Both
+ * keys exist so the template's hooks keep working if dark mode comes back.
  */
 
 import '@/global.css';
 
 import { Platform } from 'react-native';
 
+/** The artwork's own colours, sampled from the icon. */
+export const Palette = {
+  navy: '#2D308A',
+  periwinkle: '#B0C0F7',
+  indigo: '#4147EB',
+  sky: '#72BAF4',
+  grey: '#EBEBEB',
+  peach: '#FFBA71',
+  orange: '#FF9523',
+  ink: '#0B0B14',
+} as const;
+
+const light = {
+  text: Palette.ink,
+  textSecondary: '#5B5F82',
+  /** The quiet blue every screen sits on. */
+  background: '#EEF1FC',
+  /** Cards and inputs. */
+  backgroundElement: '#FFFFFF',
+  backgroundSelected: '#DDE3FA',
+  border: '#D3D9F2',
+  /** Black elements: primary buttons, the tab bar. */
+  ink: Palette.ink,
+  onInk: '#FFFFFF',
+  accent: Palette.navy,
+  onAccent: '#FFFFFF',
+  free: Palette.indigo,
+  freeSoft: '#E4E7FD',
+  busy: '#B35F07',
+  busySoft: '#FFF0DD',
+  danger: '#C8261B',
+  /** Blocks on the week grid. Own blocks are coloured by kind; others' are grey unless shared. */
+  blockClass: Palette.sky,
+  blockWork: Palette.peach,
+  blockOther: Palette.periwinkle,
+  blockUnknown: '#DCE1F3',
+  blockBorder: Palette.navy,
+  blockActive: Palette.indigo,
+  breakFill: '#D6DBFB',
+  tabInactive: '#7E83A8',
+  tabActive: Palette.periwinkle,
+};
+
 export const Colors = {
-  light: {
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
-    border: '#D9DADF',
-    accent: '#208AEF',
-    onAccent: '#ffffff',
-    free: '#1F9D55',
-    freeSoft: '#DDF3E6',
-    busy: '#C2410C',
-    danger: '#D92D20',
-    block: '#CFE3FB',
-    blockBorder: '#208AEF',
-    blockActive: '#9CC7F5',
-  },
-  dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
-    border: '#3A3D42',
-    accent: '#4FA3F7',
-    onAccent: '#000000',
-    free: '#4ADE80',
-    freeSoft: '#13361F',
-    busy: '#FB923C',
-    danger: '#F97066',
-    block: '#163A5F',
-    blockBorder: '#4FA3F7',
-    blockActive: '#245A8F',
-  },
+  light,
+  dark: light,
 } as const;
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;

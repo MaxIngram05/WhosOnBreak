@@ -1,308 +1,225 @@
 /**
- * One group: who is in it, its shared breaks this week, and -- depending on
- * your role -- renaming, sharing the code, inviting friends, and deciding who
- * else may invite.
+ * One group, in three views:
+ *
+ *   Breaks   shared free time, week by week, as a calendar or a list
+ *   People   members (tap one to browse their week) and inviting friends
+ *   Manage   rename, the join code, leaving or closing
  */
 
 import { useState } from 'react';
-import { Alert, Switch, View } from 'react-native';
+import { Alert, StyleSheet, Switch, View } from 'react-native';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
-import { MAX_GROUP_MEMBERS, type BreaksResponse, type Friend, type GroupDetail } from '@whosonbreak/contracts';
+import {
+  MAX_GROUP_MEMBERS,
+  type BreakSegment,
+  type BreaksResponse,
+  type Friend,
+  type GroupDetail,
+} from '@whosonbreak/contracts';
 import { MINUTES_PER_DAY } from '@whosonbreak/core';
 
+import { AddSchedulePrompt } from '@/components/add-schedule-prompt';
 import { ThemedText } from '@/components/themed-text';
 import {
-  Avatar,
   Button,
   Card,
+  EmptyState,
   ErrorText,
   Field,
+  List,
   Loading,
   Muted,
+  Person,
+  Pill,
   Row,
   Screen,
   Section,
   Segmented,
-  Title,
+  WeekPicker,
 } from '@/components/ui';
-import { Spacing } from '@/constants/theme';
+import { GridFrame, StaticBlock, byDay, layoutLanes } from '@/components/week-grid';
+import { Palette, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { api, describeError } from '@/lib/api';
 import { useMe } from '@/lib/auth';
-import { dayName, formatDuration, formatRange } from '@/lib/time';
+import { dayDate, formatDuration, formatRange, weekParam } from '@/lib/time';
 import { useLoad } from '@/lib/use-load';
+
+type View_ = 'breaks' | 'people' | 'manage';
 
 export default function GroupScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const me = useMe();
-  const [everyone, setEveryone] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
+  const [view, setView] = useState<View_>('breaks');
   const group = useLoad(() => api.groups.get(id), [id]);
-  const breaks = useLoad(
-    () =>
-      api.groups.breaks(id, {
-        minParticipants: everyone ? Math.max(2, group.data?.memberCount ?? 2) : 2,
-      }),
-    [id, everyone, group.data?.memberCount],
-  );
-  const friends = useLoad(() => api.friends.list());
-
-  const act = async (work: () => Promise<unknown>) => {
-    setError(null);
-    try {
-      await work();
-      await group.reload();
-    } catch (caught) {
-      setError(describeError(caught));
-    }
-  };
 
   if (!group.data) {
     return (
-      <Screen>
+      <Screen edges={[]}>
         {group.error ? <ErrorText>{group.error}</ErrorText> : <Loading />}
       </Screen>
     );
   }
 
   const detail = group.data;
-  const isOwner = detail.role === 'owner';
-  const memberIds = new Set(detail.members.map((member) => member.user.id));
-  const invitable = (friends.data ?? []).filter(
-    (friend) => friend.status === 'accepted' && !memberIds.has(friend.user.id),
-  );
 
   return (
-    <Screen refreshing={group.loading} onRefresh={() => { void group.reload(); void breaks.reload(); }}>
+    <Screen edges={[]} refreshing={group.loading} onRefresh={group.reload}>
       <Stack.Screen options={{ title: detail.name }} />
-      <Title subtitle={detail.subtitle ?? undefined}>{detail.name}</Title>
-      <Muted>{`${detail.memberCount} of ${MAX_GROUP_MEMBERS} members`}</Muted>
-      <ErrorText>{error}</ErrorText>
 
-      {isOwner ? <RenameCard detail={detail} onSaved={group.reload} /> : null}
+      <View style={styles.header}>
+        <ThemedText style={styles.name}>{detail.name}</ThemedText>
+        {detail.subtitle ? <Muted>{detail.subtitle}</Muted> : null}
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: Spacing.two }}>
+          <Pill>{`${detail.memberCount}/${MAX_GROUP_MEMBERS} people`}</Pill>
+          {detail.role === 'owner' ? <Pill tone="dark">You own this</Pill> : null}
+          {detail.role !== 'owner' && detail.canInvite ? <Pill tone="free">You can invite</Pill> : null}
+        </View>
+      </View>
 
-      {detail.canInvite && detail.joinCode ? (
-        <Section title="Invite with the code">
-          <Card style={{ alignItems: 'center' }}>
-            <ThemedText style={{ fontSize: 32, lineHeight: 40, fontWeight: 800, letterSpacing: 4 }}>
-              {detail.joinCode}
-            </ThemedText>
-            <View style={{ backgroundColor: '#fff', padding: Spacing.two, marginVertical: Spacing.two }}>
-              <QRCode value={`whosonbreak://join/${detail.joinCode}`} size={160} />
-            </View>
-            <Muted>Scan with the phone camera, or type the code in Groups.</Muted>
-            {isOwner ? (
-              <Button
-                small
-                kind="secondary"
-                title="Change code"
-                onPress={() =>
-                  Alert.alert('Change the join code?', 'The old code will stop working.', [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Change', onPress: () => act(() => api.groups.rotateCode(id)) },
-                  ])
-                }
-              />
-            ) : null}
-          </Card>
-        </Section>
-      ) : null}
+      <Segmented<View_>
+        options={[
+          { value: 'breaks', label: 'Breaks' },
+          { value: 'people', label: 'People' },
+          { value: 'manage', label: 'Manage' },
+        ]}
+        value={view}
+        onChange={setView}
+      />
 
-      {detail.canInvite && invitable.length > 0 ? (
-        <InviteFriends groupId={id} friends={invitable} />
-      ) : null}
-
-      <Section title="Members">
-        {detail.members.map((member) => {
-          const self = member.user.id === me.id;
-          return (
-            <Row
-              key={member.user.id}
-              onPress={() => router.push(`/person/${member.user.id}`)}
-              right={
-                isOwner && member.role !== 'owner' ? (
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Muted>Can invite</Muted>
-                    <Switch
-                      value={member.canInvite}
-                      onValueChange={(value) =>
-                        act(() => api.groups.setCanInvite(id, member.user.id, value))
-                      }
-                    />
-                  </View>
-                ) : undefined
-              }>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Avatar name={member.user.displayName} />
-                <View style={{ flexShrink: 1 }}>
-                  <ThemedText>
-                    {member.user.displayName}
-                    {self ? ' (you)' : ''}
-                  </ThemedText>
-                  <Muted>
-                    {[
-                      member.role === 'owner' ? 'Owner' : member.canInvite ? 'Can invite' : null,
-                      member.hasSchedule ? null : 'No schedule yet',
-                    ]
-                      .filter(Boolean)
-                      .join(' · ') || 'Member'}
-                  </Muted>
-                </View>
-              </View>
-            </Row>
-          );
-        })}
-        <Muted>Tap someone to see their week.</Muted>
-      </Section>
-
-      <Section title="Shared breaks this week">
-        <Segmented
-          options={[
-            { value: 'any', label: '2 or more free' },
-            { value: 'all', label: 'Everyone free' },
-          ]}
-          value={everyone ? 'all' : 'any'}
-          onChange={(value) => setEveryone(value === 'all')}
-        />
-        <BreakList breaks={breaks.data} />
-        <ErrorText>{breaks.error}</ErrorText>
-      </Section>
-
-      <Section title="Manage">
-        {isOwner ? (
-          <>
-            <Muted>
-              As the owner you can&apos;t leave, but you can close the group for everyone.
-            </Muted>
-            <Button
-              kind="danger"
-              title="Close group"
-              onPress={() =>
-                Alert.alert('Close this group?', 'It disappears for everyone and the code stops working.', [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Close',
-                    style: 'destructive',
-                    onPress: async () => {
-                      try {
-                        await api.groups.close(id);
-                        router.back();
-                      } catch (caught) {
-                        setError(describeError(caught));
-                      }
-                    },
-                  },
-                ])
-              }
-            />
-          </>
-        ) : (
-          <Button
-            kind="danger"
-            title="Leave group"
-            onPress={() =>
-              Alert.alert('Leave this group?', undefined, [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Leave',
-                  style: 'destructive',
-                  onPress: async () => {
-                    try {
-                      await api.groups.removeMember(id, me.id);
-                      router.back();
-                    } catch (caught) {
-                      setError(describeError(caught));
-                    }
-                  },
-                },
-              ])
-            }
-          />
-        )}
-      </Section>
+      {view === 'breaks' ? <BreaksView groupId={id} memberCount={detail.memberCount} /> : null}
+      {view === 'people' ? <PeopleView detail={detail} onChanged={group.reload} /> : null}
+      {view === 'manage' ? <ManageView detail={detail} onChanged={group.reload} /> : null}
     </Screen>
   );
 }
 
-function RenameCard({ detail, onSaved }: { detail: GroupDetail; onSaved: () => Promise<void> }) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(detail.name);
-  const [subtitle, setSubtitle] = useState(detail.subtitle ?? '');
-  const [error, setError] = useState<string | null>(null);
+// ---------------------------------------------------------------------------
+// Breaks
+// ---------------------------------------------------------------------------
 
-  if (!editing) {
-    return <Button small kind="secondary" title="Rename" onPress={() => setEditing(true)} />;
-  }
+function BreaksView({ groupId, memberCount }: { groupId: string; memberCount: number }) {
+  const me = useMe();
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [everyone, setEveryone] = useState(false);
+  const [layout, setLayout] = useState<'calendar' | 'list'>('calendar');
 
-  const save = async () => {
-    try {
-      await api.groups.update(detail.id, { name: name.trim(), subtitle: subtitle.trim() || null });
-      setEditing(false);
-      await onSaved();
-    } catch (caught) {
-      setError(describeError(caught));
-    }
-  };
+  const breaks = useLoad(
+    () =>
+      api.groups.breaks(groupId, {
+        week: weekParam(weekOffset),
+        minParticipants: everyone ? Math.max(2, memberCount) : 2,
+      }),
+    [groupId, weekOffset, everyone, memberCount],
+  );
+
+  const excluded = breaks.data?.excluded ?? [];
+  const meExcluded = excluded.some((user) => user.id === me.id);
+  const othersExcluded = excluded.filter((user) => user.id !== me.id);
 
   return (
-    <Card>
-      <Field label="Name" value={name} onChangeText={setName} maxLength={60} />
-      <Field label="Detail (optional)" value={subtitle} onChangeText={setSubtitle} maxLength={80} />
-      <ErrorText>{error}</ErrorText>
-      <View style={{ flexDirection: 'row', gap: Spacing.two }}>
-        <Button small title="Save" onPress={save} disabled={!name.trim()} />
-        <Button small kind="secondary" title="Cancel" onPress={() => setEditing(false)} />
-      </View>
-    </Card>
+    <>
+      {meExcluded ? (
+        <AddSchedulePrompt message="You're not counted in this group's breaks yet. Add your classes and shifts so the group can see when you're free." />
+      ) : null}
+      <WeekPicker offset={weekOffset} onChange={setWeekOffset} />
+      <Segmented
+        options={[
+          { value: 'any', label: 'Two or more free' },
+          { value: 'all', label: 'Everyone free' },
+        ]}
+        value={everyone ? 'all' : 'any'}
+        onChange={(value) => setEveryone(value === 'all')}
+      />
+      <Segmented
+        options={[
+          { value: 'calendar', label: 'Calendar' },
+          { value: 'list', label: 'List' },
+        ]}
+        value={layout}
+        onChange={setLayout}
+      />
+
+      <ErrorText>{breaks.error}</ErrorText>
+      {!breaks.data ? (
+        <Loading />
+      ) : breaks.data.segments.length === 0 ? (
+        <EmptyState icon="event-busy" title="No shared breaks this week">
+          <Muted>
+            {everyone
+              ? 'There is no time when everyone is free. Try "Two or more free".'
+              : 'Nobody has free time that overlaps with anyone else.'}
+          </Muted>
+        </EmptyState>
+      ) : layout === 'calendar' ? (
+        <BreakCalendar breaks={breaks.data} weekOffset={weekOffset} />
+      ) : (
+        <BreakList breaks={breaks.data} weekOffset={weekOffset} />
+      )}
+
+      {othersExcluded.length > 0 ? (
+        <Muted>
+          {`Not counted, no schedule yet: ${othersExcluded.map((u) => u.displayName).join(', ')}`}
+        </Muted>
+      ) : null}
+    </>
   );
 }
 
-function InviteFriends({ groupId, friends }: { groupId: string; friends: Friend[] }) {
-  const [sent, setSent] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-
-  return (
-    <Section title="Invite friends">
-      {friends.map((friend) => (
-        <Row
-          key={friend.user.id}
-          right={
-            sent.has(friend.user.id) ? (
-              <Muted>Invited</Muted>
-            ) : (
-              <Button
-                small
-                title="Invite"
-                onPress={async () => {
-                  try {
-                    await api.groups.invite(groupId, friend.user.id);
-                    setSent(new Set([...sent, friend.user.id]));
-                  } catch (caught) {
-                    setError(describeError(caught));
-                  }
-                }}
-              />
-            )
-          }>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Avatar name={friend.user.displayName} />
-            <ThemedText>{friend.user.displayName}</ThemedText>
-          </View>
-        </Row>
-      ))}
-      <ErrorText>{error}</ErrorText>
-    </Section>
-  );
-}
-
-function BreakList({ breaks }: { breaks: BreaksResponse | undefined }) {
+function BreakCalendar({ breaks, weekOffset }: { breaks: BreaksResponse; weekOffset: number }) {
   const theme = useTheme();
-  if (!breaks) return <Loading />;
-  if (breaks.segments.length === 0) return <Muted>No shared breaks this week.</Muted>;
+  const [chosen, setChosen] = useState<BreakSegment | null>(null);
+  const segments = breaks.segments.map((segment) => ({ ...segment, key: String(segment.start) }));
+  const perDay = byDay(segments, 5);
+  const weekend = breaks.segments.filter((s) => Math.floor(s.start / MINUTES_PER_DAY) >= 5);
 
-  const days = new Map<number, BreaksResponse['segments']>();
+  return (
+    <>
+      <View style={[styles.calendar, { borderColor: theme.border }]}>
+        <GridFrame
+          days={5}
+          weekOffset={weekOffset}
+          highlightToday={weekOffset === 0}
+          renderDay={(day, columnWidth) => {
+            const lanes = layoutLanes(perDay[day] ?? []);
+            return (perDay[day] ?? []).map((segment) => (
+              <StaticBlock
+                key={segment.key}
+                start={segment.start}
+                end={segment.end}
+                label={`${segment.users.length} free`}
+                lane={lanes.get(segment.key)?.lane ?? 0}
+                lanes={lanes.get(segment.key)?.lanes ?? 1}
+                columnWidth={columnWidth}
+                color={theme.breakFill}
+                selected={chosen?.start === segment.start}
+                onPress={() => setChosen(segment)}
+              />
+            ));
+          }}
+        />
+      </View>
+      {chosen ? (
+        <Card>
+          <View style={styles.breakHeader}>
+            <ThemedText style={{ fontWeight: 700 }}>
+              {`${dayDate(weekOffset, Math.floor(chosen.start / MINUTES_PER_DAY))} · ${formatRange(chosen.start, chosen.end)}`}
+            </ThemedText>
+            <Pill>{formatDuration(chosen.durationMinutes)}</Pill>
+          </View>
+          <Muted>{chosen.users.map((user) => user.displayName).join(', ')}</Muted>
+        </Card>
+      ) : (
+        <Muted>Tap a break to see who is free.</Muted>
+      )}
+      {weekend.length > 0 ? <Muted>{`Plus ${weekend.length} at the weekend, shown in List.`}</Muted> : null}
+    </>
+  );
+}
+
+function BreakList({ breaks, weekOffset }: { breaks: BreaksResponse; weekOffset: number }) {
+  const theme = useTheme();
+  const days = new Map<number, BreakSegment[]>();
   for (const segment of breaks.segments) {
     const day = Math.floor(segment.start / MINUTES_PER_DAY);
     days.set(day, [...(days.get(day) ?? []), segment]);
@@ -312,22 +229,314 @@ function BreakList({ breaks }: { breaks: BreaksResponse | undefined }) {
     <>
       {[...days.entries()].map(([day, segments]) => (
         <View key={day} style={{ marginBottom: Spacing.three }}>
-          <ThemedText type="smallBold" style={{ color: theme.accent }}>
-            {dayName(day)}
+          <ThemedText style={{ fontWeight: 700, color: theme.accent, marginBottom: Spacing.two }}>
+            {dayDate(weekOffset, day)}
           </ThemedText>
           {segments.map((segment) => (
             <Card key={segment.start}>
-              <ThemedText type="smallBold">
-                {formatRange(segment.start, segment.end)} · {formatDuration(segment.durationMinutes)}
-              </ThemedText>
+              <View style={styles.breakHeader}>
+                <ThemedText style={{ fontWeight: 700 }}>{formatRange(segment.start, segment.end)}</ThemedText>
+                <Pill>{formatDuration(segment.durationMinutes)}</Pill>
+              </View>
               <Muted>{segment.users.map((user) => user.displayName).join(', ')}</Muted>
             </Card>
           ))}
         </View>
       ))}
-      {breaks.excluded.length > 0 ? (
-        <Muted>{`Not counted (no schedule): ${breaks.excluded.map((u) => u.displayName).join(', ')}`}</Muted>
-      ) : null}
     </>
   );
 }
+
+// ---------------------------------------------------------------------------
+// People
+// ---------------------------------------------------------------------------
+
+function PeopleView({ detail, onChanged }: { detail: GroupDetail; onChanged: () => Promise<void> }) {
+  const me = useMe();
+  const isOwner = detail.role === 'owner';
+  const friends = useLoad(() => api.friends.list());
+  const [error, setError] = useState<string | null>(null);
+
+  const memberIds = new Set(detail.members.map((member) => member.user.id));
+  const invitable = (friends.data ?? []).filter(
+    (friend) => friend.status === 'accepted' && !memberIds.has(friend.user.id),
+  );
+
+  const act = async (work: () => Promise<unknown>) => {
+    setError(null);
+    try {
+      await work();
+      await onChanged();
+    } catch (caught) {
+      setError(describeError(caught));
+    }
+  };
+
+  return (
+    <>
+      <Section title="Members">
+        <List>
+          {detail.members.map((member, index) => (
+            <Row
+              key={member.user.id}
+              last={index === detail.members.length - 1}
+              onPress={() => router.push(`/person/${member.user.id}`)}
+              right={
+                isOwner && member.role !== 'owner' ? (
+                  <View style={{ alignItems: 'center' }}>
+                    <Switch
+                      value={member.canInvite}
+                      trackColor={{ true: Palette.indigo, false: '#C9CEE6' }}
+                      thumbColor="#FFFFFF"
+                      onValueChange={(value) =>
+                        act(() => api.groups.setCanInvite(detail.id, member.user.id, value))
+                      }
+                    />
+                    <Muted>can invite</Muted>
+                  </View>
+                ) : undefined
+              }>
+              <Person
+                id={member.user.id}
+                name={member.user.displayName}
+                you={member.user.id === me.id}
+                detail={
+                  [
+                    member.role === 'owner' ? 'Owner' : member.canInvite ? 'Can invite' : null,
+                    member.hasSchedule ? null : 'No schedule yet',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || 'Tap to see their week'
+                }
+              />
+            </Row>
+          ))}
+        </List>
+        <ErrorText>{error}</ErrorText>
+      </Section>
+
+      {detail.canInvite ? <InviteFriends groupId={detail.id} friends={invitable} /> : null}
+    </>
+  );
+}
+
+function InviteFriends({ groupId, friends }: { groupId: string; friends: Friend[] }) {
+  const [sent, setSent] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <Section title="Invite friends">
+      {friends.length === 0 ? (
+        <Card>
+          <Muted>All your friends are already here, or you haven&apos;t added any yet.</Muted>
+        </Card>
+      ) : (
+        <List>
+          {friends.map((friend, index) => (
+            <Row
+              key={friend.user.id}
+              last={index === friends.length - 1}
+              right={
+                sent.has(friend.user.id) ? (
+                  <Pill tone="free">Invited</Pill>
+                ) : (
+                  <Button
+                    small
+                    title="Invite"
+                    onPress={async () => {
+                      try {
+                        await api.groups.invite(groupId, friend.user.id);
+                        setSent(new Set([...sent, friend.user.id]));
+                      } catch (caught) {
+                        setError(describeError(caught));
+                      }
+                    }}
+                  />
+                )
+              }>
+              <Person id={friend.user.id} name={friend.user.displayName} />
+            </Row>
+          ))}
+        </List>
+      )}
+      <ErrorText>{error}</ErrorText>
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Manage
+// ---------------------------------------------------------------------------
+
+function ManageView({ detail, onChanged }: { detail: GroupDetail; onChanged: () => Promise<void> }) {
+  const me = useMe();
+  const isOwner = detail.role === 'owner';
+  const [error, setError] = useState<string | null>(null);
+
+  const act = async (work: () => Promise<unknown>) => {
+    setError(null);
+    try {
+      await work();
+      await onChanged();
+    } catch (caught) {
+      setError(describeError(caught));
+    }
+  };
+
+  const confirm = (title: string, message: string, action: string, work: () => Promise<unknown>) =>
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: action,
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await work();
+            router.back();
+          } catch (caught) {
+            setError(describeError(caught));
+          }
+        },
+      },
+    ]);
+
+  return (
+    <>
+      {isOwner ? <RenameCard detail={detail} onSaved={onChanged} /> : null}
+
+      {detail.canInvite && detail.joinCode ? (
+        <Section title="Join code">
+          <Card style={{ alignItems: 'center' }}>
+            <ThemedText style={styles.code}>{detail.joinCode}</ThemedText>
+            <View style={styles.qr}>
+              <QRCode value={`whosonbreak://join/${detail.joinCode}`} size={170} color={Palette.navy} />
+            </View>
+            <Muted>Scan it in the app, or type the code in Groups.</Muted>
+            {isOwner ? (
+              <View style={{ marginTop: Spacing.three }}>
+                <Button
+                  small
+                  kind="secondary"
+                  icon="refresh"
+                  title="Change code"
+                  onPress={() =>
+                    Alert.alert('Change the join code?', 'The old code will stop working.', [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Change', onPress: () => act(() => api.groups.rotateCode(detail.id)) },
+                    ])
+                  }
+                />
+              </View>
+            ) : null}
+          </Card>
+        </Section>
+      ) : (
+        <Card>
+          <Muted>Only the owner and people they allow can share this group&apos;s code.</Muted>
+        </Card>
+      )}
+
+      <Section title={isOwner ? 'Close group' : 'Leave group'}>
+        {isOwner ? (
+          <>
+            <Muted>As the owner you can&apos;t leave, but you can close the group for everyone.</Muted>
+            <Button
+              kind="danger"
+              title="Close group"
+              onPress={() =>
+                confirm(
+                  'Close this group?',
+                  'It disappears for everyone and the code stops working.',
+                  'Close',
+                  () => api.groups.close(detail.id),
+                )
+              }
+            />
+          </>
+        ) : (
+          <Button
+            kind="danger"
+            title="Leave group"
+            onPress={() =>
+              confirm('Leave this group?', 'You can rejoin with the code.', 'Leave', () =>
+                api.groups.removeMember(detail.id, me.id),
+              )
+            }
+          />
+        )}
+      </Section>
+      <ErrorText>{error}</ErrorText>
+    </>
+  );
+}
+
+function RenameCard({ detail, onSaved }: { detail: GroupDetail; onSaved: () => Promise<void> }) {
+  const [name, setName] = useState(detail.name);
+  const [subtitle, setSubtitle] = useState(detail.subtitle ?? '');
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const changed = name.trim() !== detail.name || subtitle.trim() !== (detail.subtitle ?? '');
+
+  const save = async () => {
+    setError(null);
+    try {
+      await api.groups.update(detail.id, { name: name.trim(), subtitle: subtitle.trim() || null });
+      setSaved(true);
+      await onSaved();
+    } catch (caught) {
+      setError(describeError(caught));
+    }
+  };
+
+  return (
+    <Section title="Name">
+      <Card>
+        <Field label="Name" value={name} onChangeText={(t) => { setName(t); setSaved(false); }} maxLength={60} />
+        <Field
+          label="Detail (optional)"
+          placeholder="e.g. Section D, Mon/Wed"
+          value={subtitle}
+          onChangeText={(t) => { setSubtitle(t); setSaved(false); }}
+          maxLength={80}
+        />
+        <ErrorText>{error}</ErrorText>
+        <Button title={saved && !changed ? 'Saved' : 'Save'} onPress={save} disabled={!name.trim() || !changed} />
+      </Card>
+    </Section>
+  );
+}
+
+const styles = StyleSheet.create({
+  header: {
+    marginBottom: Spacing.three,
+  },
+  name: {
+    fontSize: 26,
+    lineHeight: 32,
+    fontWeight: 800,
+  },
+  calendar: {
+    height: 460,
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    marginBottom: Spacing.three,
+  },
+  breakHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  code: {
+    fontSize: 34,
+    lineHeight: 42,
+    fontWeight: 800,
+    letterSpacing: 6,
+  },
+  qr: {
+    backgroundColor: '#FFFFFF',
+    padding: Spacing.two,
+    marginVertical: Spacing.three,
+  },
+});

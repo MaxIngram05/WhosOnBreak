@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
+import { Colors, Palette } from '@/constants/theme';
 import { AuthProvider, useAuth } from '@/lib/auth';
 
 SplashScreen.preventAutoHideAsync();
@@ -21,7 +21,15 @@ function RootNavigator() {
   const signedIn = state.status === 'signedIn';
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
+    <Stack
+      screenOptions={{
+        headerShown: false,
+        // Pushed screens get a navy bar, the artwork's background colour.
+        headerStyle: { backgroundColor: Palette.navy },
+        headerTintColor: '#FFFFFF',
+        headerTitleStyle: { fontWeight: 700 },
+        contentStyle: { backgroundColor: Colors.light.background },
+      }}>
       <Stack.Protected guard={signedIn}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="group/[id]" options={{ headerShown: true, title: 'Group' }} />
@@ -37,11 +45,23 @@ function RootNavigator() {
   );
 }
 
+/** Navigation chrome in the app's palette rather than the platform default. */
+const navigationTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    primary: Palette.navy,
+    background: Colors.light.background,
+    card: Colors.light.backgroundElement,
+    text: Colors.light.text,
+    border: Colors.light.border,
+  },
+};
+
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <ThemeProvider value={navigationTheme}>
         <AuthProvider>
           <RootNavigator />
         </AuthProvider>

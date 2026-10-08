@@ -5,13 +5,25 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
+import type { BlockKind } from '@whosonbreak/contracts';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
 import { MINUTES_PER_DAY } from '@whosonbreak/core';
 
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
-import { dayName, formatRange, todayIndex } from '@/lib/time';
+import { Colors } from '@/constants/theme';
+import { dayDate, dayName, formatRange, todayIndex } from '@/lib/time';
+
+type ThemeColors = (typeof Colors)['light'];
+
+/** A block's fill: by its kind when known, a neutral grey when it is withheld. */
+export function blockColor(theme: ThemeColors, kind: BlockKind | null): string {
+  if (kind === 'class') return theme.blockClass;
+  if (kind === 'work') return theme.blockWork;
+  if (kind === 'other') return theme.blockOther;
+  return theme.blockUnknown;
+}
 
 export const HOUR_HEIGHT = 52;
 export const GUTTER = 40;
@@ -89,12 +101,15 @@ export function GridFrame({
   renderDay,
   highlightToday = true,
   raisedDay,
+  weekOffset,
 }: {
   days: number;
   renderDay: (day: number, columnWidth: number) => ReactNode;
   highlightToday?: boolean;
   /** Drawn above the other days, so a block dragged out of it stays visible. */
   raisedDay?: number | null;
+  /** When set, day headers show dates for the week this many weeks from now. */
+  weekOffset?: number;
 }) {
   const theme = useTheme();
   const [width, setWidth] = useState(0);
@@ -110,23 +125,32 @@ export function GridFrame({
   }, []);
 
   return (
-    <View style={{ flex: 1 }} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+    <View
+      style={{ flex: 1, backgroundColor: theme.backgroundElement }}
+      onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
       <View style={[styles.header, { borderBottomColor: theme.border }]}>
         <View style={{ width: GUTTER }} />
-        {Array.from({ length: days }, (_, day) => (
-          <View key={day} style={{ width: columnWidth, alignItems: 'center' }}>
-            <ThemedText
-              type="smallBold"
-              style={{
-                color: highlightToday && day === today ? theme.accent : theme.textSecondary,
-              }}>
-              {dayName(day)}
-            </ThemedText>
-          </View>
-        ))}
+        {Array.from({ length: days }, (_, day) => {
+          const isToday = highlightToday && day === today;
+          return (
+            <View key={day} style={{ width: columnWidth, alignItems: 'center' }}>
+              <View
+                style={[
+                  styles.dayChip,
+                  isToday && { backgroundColor: theme.ink },
+                ]}>
+                <ThemedText
+                  type="smallBold"
+                  style={{ color: isToday ? theme.onInk : theme.text, fontSize: 12 }}>
+                  {weekOffset === undefined ? dayName(day) : dayDate(weekOffset, day)}
+                </ThemedText>
+              </View>
+            </View>
+          );
+        })}
       </View>
 
-      <ScrollView ref={scroll} style={{ flex: 1 }}>
+      <ScrollView ref={scroll} style={{ flex: 1 }} nestedScrollEnabled>
         <View style={{ flexDirection: 'row', height: 24 * HOUR_HEIGHT }}>
           <View style={{ width: GUTTER }}>
             {Array.from({ length: 24 }, (_, hour) => (
@@ -179,6 +203,9 @@ export function StaticBlock({
   lane,
   lanes,
   columnWidth,
+  color,
+  selected,
+  onPress,
 }: {
   start: number;
   end: number;
@@ -187,12 +214,17 @@ export function StaticBlock({
   lane: number;
   lanes: number;
   columnWidth: number;
+  color?: string;
+  selected?: boolean;
+  onPress?: () => void;
 }) {
   const theme = useTheme();
   const minuteOfDay = start % MINUTES_PER_DAY;
   const laneWidth = columnWidth / lanes;
   return (
-    <View
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress}
       style={[
         styles.block,
         {
@@ -200,46 +232,55 @@ export function StaticBlock({
           height: Math.max(14, minutesToPixels(end - start)),
           left: lane * laneWidth + 1,
           width: laneWidth - 2,
-          backgroundColor: theme.block,
+          backgroundColor: color ?? theme.blockUnknown,
           borderLeftColor: theme.blockBorder,
+          borderWidth: selected ? 2 : 0,
+          borderColor: theme.blockActive,
         },
       ]}>
       <ThemedText numberOfLines={2} style={styles.blockText}>
         {label ?? 'Busy'}
       </ThemedText>
-      <ThemedText numberOfLines={1} style={[styles.blockTime, { color: theme.textSecondary }]}>
+      <ThemedText numberOfLines={1} style={styles.blockTime}>
         {detail ? `${detail} · ` : ''}
         {formatRange(start, end)}
       </ThemedText>
-    </View>
+    </Pressable>
   );
 }
 
 export const gridStyles = StyleSheet.create({
   block: {
     position: 'absolute',
-    borderRadius: 6,
+    borderRadius: 8,
     borderLeftWidth: 3,
-    paddingHorizontal: 3,
-    paddingVertical: 2,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
     overflow: 'hidden',
   },
   blockText: {
     fontSize: 11,
     lineHeight: 13,
-    fontWeight: 600,
+    fontWeight: 700,
+    color: '#0B0B14',
   },
   blockTime: {
     fontSize: 10,
     lineHeight: 12,
+    color: '#2D308A',
   },
 });
 
 const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
-    paddingVertical: 6,
+    paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  dayChip: {
+    borderRadius: 999,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
   hourLabel: {
     position: 'absolute',

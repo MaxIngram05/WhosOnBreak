@@ -30,7 +30,7 @@ export default function JoinFromLink() {
   };
 
   return (
-    <Screen>
+    <Screen edges={[]}>
       <ThemedText style={{ fontSize: 28, lineHeight: 36, fontWeight: 800, marginBottom: Spacing.two }}>
         {normalised}
       </ThemedText>

@@ -1,11 +1,9 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Tabs } from 'expo-router';
-import type { ComponentProps } from 'react';
 import type { ColorValue } from 'react-native';
 
+import type { IconName } from '@/components/ui';
 import { useTheme } from '@/hooks/use-theme';
-
-type IconName = ComponentProps<typeof MaterialIcons>['name'];
 
 function icon(name: IconName) {
   function TabIcon({ color, size }: { color: ColorValue; size: number }) {
@@ -14,16 +12,26 @@ function icon(name: IconName) {
   return TabIcon;
 }
 
+/** A black tab bar: the app's "black elements" against its quiet blue. */
 export default function TabLayout() {
   const theme = useTheme();
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: theme.accent,
-        tabBarStyle: { backgroundColor: theme.background, borderTopColor: theme.border },
+        // Otherwise Android lifts the bar above the keyboard, over what you're typing.
+        tabBarHideOnKeyboard: true,
+        tabBarActiveTintColor: theme.tabActive,
+        tabBarInactiveTintColor: theme.tabInactive,
+        tabBarStyle: {
+          backgroundColor: theme.ink,
+          borderTopWidth: 0,
+          height: 64,
+          paddingTop: 6,
+        },
+        tabBarLabelStyle: { fontWeight: 600, fontSize: 11 },
       }}>
-      <Tabs.Screen name="index" options={{ title: 'Today', tabBarIcon: icon('schedule') }} />
+      <Tabs.Screen name="index" options={{ title: 'Today', tabBarIcon: icon('wb-sunny') }} />
       <Tabs.Screen
         name="schedule"
         options={{ title: 'My week', tabBarIcon: icon('calendar-view-week') }}
